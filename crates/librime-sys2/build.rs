@@ -20,6 +20,7 @@ fn librime_dir() -> PathBuf {
         .join("librime")
 }
 
+#[allow(dead_code)]
 fn check_pkg_config() -> Option<PathBuf> {
     if pkg_config::find_library("rime").is_ok() {
         println!("cargo:warning=Found librime via pkg-config");
@@ -30,6 +31,7 @@ fn check_pkg_config() -> Option<PathBuf> {
     }
 }
 
+#[allow(dead_code)]
 fn cmake_build(librime: &std::path::Path) -> Option<PathBuf> {
     if !librime.join("CMakeLists.txt").exists() {
         return None;
@@ -114,6 +116,7 @@ fn cmake_build(librime: &std::path::Path) -> Option<PathBuf> {
     }
 }
 
+#[allow(dead_code)]
 fn link_librime(dist: Option<PathBuf>) {
     if let Some(dist_dir) = dist {
         if dist_dir.as_os_str().is_empty() {
@@ -135,13 +138,6 @@ fn link_librime(dist: Option<PathBuf>) {
 
 #[cfg(target_os = "windows")]
 fn build_windows() {
-    use std::io::Write;
-    use std::process::Stdio;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use std::thread;
-    use std::time::Duration;
-
     let librime = librime_dir();
     let dist_dir = librime.join("dist");
     let dist_lib_dir = dist_dir.join("lib");
@@ -173,7 +169,11 @@ fn build_windows() {
 fn build_librime_source_win(librime_dir: &std::path::Path, _dist_lib_dir: &std::path::Path) {
     use std::io::Write;
     use std::path::PathBuf;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
 
     println!(
         "cargo:warning=Building librime from source (this may take 10+ minutes on first build)..."
