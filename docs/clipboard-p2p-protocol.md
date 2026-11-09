@@ -1,6 +1,6 @@
 # 跨设备剪贴板 P2P 协议草案
 
-- 状态：**v0.2 —— 协议核心已实现（`crates/xime-p2p`），发现层与端上接入待做，见 §14**
+- 状态：**v0.2 —— 协议核心已实现（独立仓 `libximep2p`），发现层与端上接入待做，见 §14**
 - 适用：macOS / Windows / Linux（Rust，直接依赖）+ Android（手写 JNI，见 §13）
 - 归属：`libximecore`
 
@@ -408,8 +408,8 @@ Streaming ──(空闲 30s / BYE / IO 错误)──> Idle
 
 | 文件 | 内容 |
 |---|---|
-| `crates/xime-p2p/tests/vectors/frames.json` | 帧编解码的正向用例 + 必须拒绝的帧头 |
-| `crates/xime-p2p/tests/vectors/pairing.json` | 配对 KDF 派生结果、确认值、会话 prologue |
+| `libximep2p/crates/xime-p2p/tests/vectors/frames.json` | 帧编解码的正向用例 + 必须拒绝的帧头 |
+| `libximep2p/crates/xime-p2p/tests/vectors/pairing.json` | 配对 KDF 派生结果、确认值、会话 prologue |
 
 Android 侧的实现必须把这两份 JSON 当只读契约：改协议先改 JSON，两侧同时变红才算改对。
 
@@ -464,13 +464,16 @@ SPAKE2 与 Noise 的**实际输出依赖随机数，无法手工固化为固定�
    Android 绑定手写 JNI，风格与现有 `rime_jni.cc` / `onnx_jni.cc` 一致，不引入代码生成工具：
    对外仅 6 个函数、参数一律 JSON 字符串、事件用轮询而非回调，没有生成器的用武之地；
    同时避免在 F-Droid 可复现构建链条上多一个与工具版本相关的环节。
-   license 已定为 MIT（`crates/xime-p2p/Cargo.toml`），与 GPL 输入法部分分离。
+   license 与 libximecore 一致（GPL-3.0-or-later），协议核心已拆到独立仓 `libximep2p`。
 2. **端口冲突策略**：固定端口顺延，还是每次随机后由 TXT 声明。倾向前者（防火墙规则稳定）。
 3. **二维码扩展**：`xime://pair?v=1&did=..&code=..&addr=..` 可在动态码之外提供扫码路径，共享同一套握手。本版不实现。
 4. **三端以上**：需要把 `seq` 换成按 `did` 分桶的向量时钟，届时 `ClipboardEvent` 需加 `origin` 字段。
 5. **Android 侧保活**：短连接 + 补发已足够，是否需要前台服务待真机验证后再定。
 
 ## 14. 实现进度
+
+> 协议核心已迁到独立仓 `libximep2p`（GPL-3.0-or-later）；下表「位置」与
+> `cargo test -p xime-p2p` 都相对该仓。libximecore 经 git 依赖（pin rev）使用。
 
 | 模块 | 状态 | 位置 |
 |---|---|---|
