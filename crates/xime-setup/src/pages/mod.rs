@@ -105,6 +105,17 @@ pub fn voice_page_index() -> Option<usize> {
         .position(|(_, title)| *title == "语音转文本")
 }
 
+/// 「设备关联」页在侧栏里的扁平下标（没编进这个页面时 None）。
+///
+/// 同 [`voice_page_index`]：按标题反查，不写死数字——侧栏分组顺序会变，
+/// 写死是静默错位（按钮点过去落到别的页）。
+#[cfg(feature = "pair-page")]
+pub fn pair_page_index() -> Option<usize> {
+    sidebar_items()
+        .iter()
+        .position(|(_, title)| *title == "设备关联")
+}
+
 /// 侧栏导航：品牌区 + 分组标题 + 各组导航项（点击仍发扁平下标）。
 pub fn sidebar(current: usize, colors: &ThemeColors) -> Element<'static, Message> {
     let groups = sidebar_groups();
@@ -185,10 +196,18 @@ fn nav_button(
     colors: &ThemeColors,
 ) -> Element<'static, Message> {
     let colors = *colors;
+    // 侧栏图标一律染成单色：这批 svg 来自不同来源，有的自带彩色填充、有的
+    // 深浅不一，直接渲染会在侧栏里凑出一排花绿小图，跟文字也不一个调子。
+    let tint = if active {
+        colors.primary
+    } else {
+        colors.foreground_muted
+    };
     let icon: Element<'static, Message> = match crate::Assets::get(icon_path) {
         Some(f) => svg(svg::Handle::from_memory(f.data))
             .width(16)
             .height(16)
+            .style(move |_theme, _status| svg::Style { color: Some(tint) })
             .into(),
         None => Space::new().width(16).into(),
     };

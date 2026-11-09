@@ -25,6 +25,8 @@ iced = { version = "0.14", default-features = false, features = [
 ] }
 xime-config = { path = "../xime-config" }
 xime-plugin = { path = "../xime-plugin" }
+# 设备关联页（pair-page）：局域网 P2P 配对。可选，未启用该页的宿主不必链接。
+xime-p2p = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_yaml.workspace = true
 serde_json = "1"
@@ -66,8 +68,11 @@ arboard.workspace = true
 [features]
 default = []
 smart-suggestion-page = []
-pair-page = []
+pair-page = ["dep:xime-p2p"]
 clipboard-page = []
 backup-page = []
 voice-page = []
 dict-page = []
+
+[dev-dependencies]
+tempfile.workspace = true

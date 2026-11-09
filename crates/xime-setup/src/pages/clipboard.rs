@@ -3,9 +3,9 @@ use crate::components::settings::{settings_group, settings_item, settings_page};
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 use crate::components::widgets::{badge, button_primary, button_secondary};
 use crate::components::widgets::{
-    label, medium, modal_dialog, semibold, switch, text_button, text_input_style,
+    label, medium, modal_dialog, pick_list_style, semibold, tab_bar, text_button, text_input_style,
 };
-use crate::state::{ClipboardState, Message, SettingsState, CLIPBOARD_PAGE_SIZE};
+use crate::state::{ClipboardState, Message, SettingsState, SyncMode, CLIPBOARD_PAGE_SIZE};
 use crate::theme::ThemeColors;
 use iced::widget::{button, column, container, pick_list, row, text, text_input};
 use iced::{border, Background, Border, Color, Element, Length};
@@ -47,15 +47,15 @@ fn server_groups<'a>(c: &'a ClipboardState, colors: &'a ThemeColors) -> Vec<Elem
 
     // 配置编辑：未运行时允许修改（运行中修改需重启生效）
     let editable = !c.running;
-    let addr_input = text_input("0.0.0.0:8443", &c.server_addr)
+    let addr_input = text_input("0.0.0.0:8443", &c.server_addr).size(14).padding([8, 10])
         .on_input_maybe(editable.then_some(Message::ServerAddrChanged))
         .style(move |_t, s| text_input_style(colors, s))
         .width(Length::FillPortion(2));
-    let user_input = text_input("xime", &c.username)
+    let user_input = text_input("xime", &c.username).size(14).padding([8, 10])
         .on_input_maybe(editable.then_some(Message::ServerUsernameChanged))
         .style(move |_t, s| text_input_style(colors, s))
         .width(Length::FillPortion(2));
-    let pass_input = text_input("", &c.password)
+    let pass_input = text_input("", &c.password).size(14).padding([8, 10])
         .on_input_maybe(editable.then_some(Message::ServerPasswordChanged))
         .secure(true)
         .style(move |_t, s| text_input_style(colors, s))
@@ -128,7 +128,8 @@ fn server_groups<'a>(
     Vec::new()
 }
 
-/// 剪贴板同步 Tab：插件方案（全平台，对齐 Android）+ 本地同步服务器（仅 Linux）。
+/// 剪贴板同步 Tab：同步方式三选一（关闭 / 同步插件 / 设备互传）
+/// + 本地同步服务器（仅 Linux）。
 fn sync_groups<'a>(
     settings: &'a SettingsState,
     colors: &'a ThemeColors,
@@ -136,18 +137,110 @@ fn sync_groups<'a>(
     let sp = &settings.sync_plugin;
     let mut sync_items: Vec<Element<'a, Message>> = Vec::new();
 
-    // 启用开关。
+    // 原来的「启用开关 + 插件下拉」是两个控件拼出四种状态，其中三种说不清：
+    // 开关开着但没选插件、选了插件但开关关着……这里换成一个显式三选一，
+    // 与 IME 侧 `desired_key` 的判定一一对应。
     sync_items.push(settings_item(
-        "启用剪贴板同步",
-        Some("通过同步插件与远端设备双向同步（与 Android 插件通用）"),
+        "同步方式",
+        Some("两种方式只能选一种；「设备互传」不经过任何服务器"),
         colors,
-        switch(sp.enabled, colors, Message::SyncPluginEnabled),
+        tab_bar(
+            &SyncMode::LABELS,
+            sp.mode.index(),
+            colors,
+            Message::SyncModeChanged,
+        ),
     ));
+
+    match sp.mode {
+        SyncMode::Off => {
+            sync_items.push(settings_item(
+                "同步已关闭",
+                Some("剪贴板只保存在本机，不发送到任何设备"),
+                colors,
+                label("", colors),
+            ));
+        }
+        SyncMode::P2p => {
+            sync_items.push(p2p_peers_item(sp, colors));
+        }
+        SyncMode::Plugin => {
+            sync_items.extend(plugin_items(sp, colors));
+        }
+    }
+
+    if let Some(msg) = &sp.message {
+        sync_items.push(settings_item(
+            "状态",
+            None::<String>,
+            colors,
+            text(msg).size(13).color(colors.foreground_muted).into(),
+        ));
+    }
+
+    let mut groups = vec![settings_group(
+        "剪贴板同步",
+        Some("启用后输入法在后台自动推送/拉取；关闭即时生效，无需重启输入法"),
+        colors,
+        sync_items,
+    )];
+    groups.extend(server_groups(&settings.clipboard, colors));
+    groups
+}
+
+/// 设备互传：已配对设备一览 + 去配对入口。
+fn p2p_peers_item<'a>(
+    sp: &'a crate::state::SyncPluginUiState,
+    colors: &'a ThemeColors,
+) -> Element<'a, Message> {
+    let (title, desc) = if sp.p2p_peers.is_empty() {
+        (
+            "已配对设备".to_string(),
+            p2p_empty_hint().to_string(),
+        )
+    } else {
+        (
+            format!("已配对 {} 台设备", sp.p2p_peers.len()),
+            sp.p2p_peers.join("、"),
+        )
+    };
+    settings_item(title, Some(desc), colors, pair_entry_button(colors))
+}
+
+/// 没有配对设备时的说明。编入了设备关联页才能真的去配对，否则得说清原因。
+fn p2p_empty_hint() -> &'static str {
+    #[cfg(feature = "pair-page")]
+    {
+        "还没有配对的设备。设备互传需要先让两台设备互相信任，否则不会同步任何内容"
+    }
+    #[cfg(not(feature = "pair-page"))]
+    {
+        "当前版本未包含「设备关联」页，无法完成配对"
+    }
+}
+
+/// 「去配对」按钮：跳到设备关联页（页面下标按标题反查，不写死数字）。
+fn pair_entry_button<'a>(colors: &'a ThemeColors) -> Element<'a, Message> {
+    #[cfg(feature = "pair-page")]
+    {
+        if let Some(index) = crate::pages::pair_page_index() {
+            return text_button("去配对", colors, Message::PageSelected(index)).into();
+        }
+    }
+    label("", colors)
+}
+
+/// 同步插件：插件选择 + 配置表单。
+fn plugin_items<'a>(
+    sp: &'a crate::state::SyncPluginUiState,
+    colors: &'a ThemeColors,
+) -> Vec<Element<'a, Message>> {
+    let mut items: Vec<Element<'a, Message>> = Vec::new();
 
     // 插件选择：列出全部已安装的 clipboard_sync 插件（对齐 Android 端，
     // 停用的也显示——选中即启用并通知 daemon 重载）。
     if sp.plugins.is_empty() {
-        sync_items.push(settings_item(
+        items.push(settings_item(
             "同步插件",
             Some("未安装 clipboard_sync 插件；请将插件目录放入 plugins/ 后重启设置程序"),
             colors,
@@ -170,9 +263,16 @@ fn sync_groups<'a>(
             id: p.id.clone(),
             name: p.name.clone(),
         });
-        sync_items.push(settings_item(
+        // 选了「同步插件」却没选具体插件：IME 侧会因为 plugin_id 为空直接跳过同步，
+        // 界面不能装作已生效。
+        let desc = if current.is_none() {
+            "选择一个插件后才会真正开始同步"
+        } else {
+            "选择承载剪贴板同步的插件，选中后立即生效"
+        };
+        items.push(settings_item(
             "同步插件",
-            Some("选择承载剪贴板同步的插件，选中后立即生效"),
+            Some(desc),
             colors,
             pick_list(options, current, |chosen| {
                 Message::SyncPluginSelected(
@@ -181,13 +281,14 @@ fn sync_groups<'a>(
                         .position(|p| p.id == chosen.id)
                         .unwrap_or(0),
                 )
-            })
+            }).text_size(14).padding([8, 10])
+            .style(move |_theme, status| pick_list_style(colors, status))
             .into(),
         ));
     }
 
     if sp.busy == Some("schema") {
-        sync_items.push(settings_item(
+        items.push(settings_item(
             "插件配置",
             None::<String>,
             colors,
@@ -199,54 +300,38 @@ fn sync_groups<'a>(
             .width(Length::Fill)
             .into(),
         ));
-    } else {
-        for (field, value) in &sp.fields {
-            if field.ftype == "button" {
-                sync_items.push(settings_item(
-                    field.label.clone(),
-                    field.help_text.clone(),
-                    colors,
-                    text_button(field.label.clone(), colors, Message::SyncPluginTest).into(),
-                ));
-                continue;
-            }
-            let key = field.key.clone();
-            let on_input = (!sp.busy.is_some()).then(|| {
-                let key = key.clone();
-                move |v: String| Message::SyncPluginFieldChanged(key.clone(), v)
-            });
-            let input = text_input(field.placeholder.as_deref().unwrap_or(""), value)
-                .on_input_maybe(on_input)
-                .secure(field.ftype == "secret")
-                .style(move |_t, s| text_input_style(colors, s))
-                .width(Length::FillPortion(2));
-            sync_items.push(settings_item(
+        return items;
+    }
+
+    for (field, value) in &sp.fields {
+        if field.ftype == "button" {
+            items.push(settings_item(
                 field.label.clone(),
                 field.help_text.clone(),
                 colors,
-                input.into(),
+                text_button(field.label.clone(), colors, Message::SyncPluginTest).into(),
             ));
+            continue;
         }
-    }
-    if let Some(msg) = &sp.message {
-        sync_items.push(settings_item(
-            "状态",
-            None::<String>,
+        let key = field.key.clone();
+        let on_input = (!sp.busy.is_some()).then(|| {
+            let key = key.clone();
+            move |v: String| Message::SyncPluginFieldChanged(key.clone(), v)
+        });
+        let input = text_input(field.placeholder.as_deref().unwrap_or(""), value).size(14).padding([8, 10])
+            .on_input_maybe(on_input)
+            .secure(field.ftype == "secret")
+            .style(move |_t, s| text_input_style(colors, s))
+            .width(Length::FillPortion(2));
+        items.push(settings_item(
+            field.label.clone(),
+            field.help_text.clone(),
             colors,
-            text(msg).size(13).color(colors.foreground_muted).into(),
+            input.into(),
         ));
     }
 
-    let plugin_group = settings_group(
-        "剪贴板同步（插件）",
-        Some("启用后输入法在后台自动推送/拉取；协议由插件承载，多端使用同一插件即可互通"),
-        colors,
-        sync_items,
-    );
-
-    let mut groups = vec![plugin_group];
-    groups.extend(server_groups(&settings.clipboard, colors));
-    groups
+    items
 }
 
 /// 剪贴板页：Tabs 切换「剪贴板历史 / 快捷发送 / 剪贴板同步」。
@@ -363,11 +448,11 @@ fn quick_send_dialog<'a>(
     colors: &'a ThemeColors,
 ) -> Element<'a, Message> {
     let q = &settings.quick_send;
-    let content_input = text_input("要快速发送的内容", &q.draft_content)
+    let content_input = text_input("要快速发送的内容", &q.draft_content).size(14).padding([8, 10])
         .on_input(Message::QuickSendContentChanged)
         .style(move |_t, s| text_input_style(colors, s))
         .width(Length::Fill);
-    let code_input = text_input("如 dh", &q.draft_code)
+    let code_input = text_input("如 dh", &q.draft_code).size(14).padding([8, 10])
         .on_input(Message::QuickSendCodeChanged)
         .style(move |_t, s| text_input_style(colors, s))
         .width(Length::Fill);
@@ -420,59 +505,12 @@ fn clipboard_header<'a>(
     header.into()
 }
 
-/// 页内 Tab 栏（样式对齐扩展商店页 tab_bar）。
+/// 页内 Tab 栏：样式由共用 [`tab_bar`] 提供，这里只给标签表。
 fn clipboard_tab_bar<'a>(active: usize, colors: &'a ThemeColors) -> Element<'a, Message> {
-    let labels = ["剪贴板历史", "快捷发送", "剪贴板同步"];
-    let mut bar = row![].spacing(2).padding(2);
-
-    for (i, label_text) in labels.iter().enumerate() {
-        let is_active = i == active;
-        let label_text = *label_text;
-        bar = bar.push(
-            button(text(label_text).size(14).color(if is_active {
-                colors.primary
-            } else {
-                colors.foreground_muted
-            }))
-            .padding([7, 16])
-            .style(move |_theme, status| {
-                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-                button::Style {
-                    background: if is_active || hovered {
-                        Some(Background::Color(colors.surface))
-                    } else {
-                        None
-                    },
-                    text_color: if is_active {
-                        colors.primary
-                    } else {
-                        colors.foreground_muted
-                    },
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: border::radius(8.0),
-                    },
-                    ..button::Style::default()
-                }
-            })
-            .on_press(Message::ClipboardTab(i)),
-        );
-    }
-
-    container(bar)
-        .width(Length::Shrink)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(colors.surface_variant)),
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: border::radius(10.0),
-            },
-            ..container::Style::default()
-        })
-        .into()
+    tab_bar(&CLIPBOARD_TABS, active, colors, Message::ClipboardTab)
 }
+
+const CLIPBOARD_TABS: [&str; 3] = ["剪贴板历史", "快捷发送", "剪贴板同步"];
 
 // ------------------------------------------------------------------
 // 剪贴板历史（server 剪贴板工作线程持久化 → clipboard.db）

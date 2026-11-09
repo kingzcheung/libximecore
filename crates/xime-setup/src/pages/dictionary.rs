@@ -17,7 +17,7 @@ use crate::components::widgets::{
 #[cfg(any(windows, feature = "dict-page"))]
 use crate::state::{CustomPhraseState, DICT_ENTRIES_PAGE_SIZE};
 #[cfg(any(windows, feature = "dict-page"))]
-use iced::widget::{button, column, container, pick_list, row, text, text_input, Space};
+use iced::widget::{column, container, pick_list, row, text, text_input, Space};
 #[cfg(any(windows, feature = "dict-page"))]
 use iced::{border, Alignment, Background, Border, Color, Length};
 
@@ -38,7 +38,7 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
     .spacing(12)
     .align_y(Alignment::Center);
 
-    let mut content = column![header, tab_bar(d.tab, colors)]
+    let mut content = column![header, dict_tab_bar(d.tab, colors)]
         .spacing(16)
         .padding(20)
         .width(Length::Fill);
@@ -63,60 +63,15 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
     modal_dialog(content.into(), dialog, colors)
 }
 
-/// 页内 Tab 栏（样式对齐剪贴板页 / 输入方案页）。
+/// 页内 Tab 栏：用户词典 / 快捷短语。
 #[cfg(any(windows, feature = "dict-page"))]
-fn tab_bar<'a>(active: usize, colors: &'a ThemeColors) -> Element<'a, Message> {
-    let colors = *colors;
-    let labels = ["用户词典", "快捷短语"];
-    let mut bar = row![].spacing(2).padding(2);
-
-    for (i, label_text) in labels.iter().enumerate() {
-        let is_active = i == active;
-        let label_text = *label_text;
-        bar = bar.push(
-            button(text(label_text).size(14).color(if is_active {
-                colors.primary
-            } else {
-                colors.foreground_muted
-            }))
-            .padding([7, 16])
-            .style(move |_theme, status| {
-                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-                button::Style {
-                    background: if is_active || hovered {
-                        Some(Background::Color(colors.surface))
-                    } else {
-                        None
-                    },
-                    text_color: if is_active {
-                        colors.primary
-                    } else {
-                        colors.foreground_muted
-                    },
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: border::radius(8.0),
-                    },
-                    ..button::Style::default()
-                }
-            })
-            .on_press(Message::DictTab(i)),
-        );
-    }
-
-    container(bar)
-        .width(Length::Shrink)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(colors.surface_variant)),
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: border::radius(10.0),
-            },
-            ..container::Style::default()
-        })
-        .into()
+fn dict_tab_bar<'a>(active: usize, colors: &'a ThemeColors) -> Element<'a, Message> {
+    crate::components::widgets::tab_bar(
+        &["用户词典", "快捷短语"],
+        active,
+        colors,
+        Message::DictTab,
+    )
 }
 
 // ---- 表格件（列头 / 斑马纹行 / 定宽单元格 / 行内按钮） ----
@@ -297,7 +252,7 @@ fn user_dict_view<'a>(
         .padding([4, 2])
         .into()
     } else {
-        pick_list(dict_options, current, Message::DictSelect)
+        pick_list(dict_options, current, Message::DictSelect).text_size(14).padding([8, 10])
             .style(move |_theme, status| pick_list_style(colors, status))
             .placeholder("选择词典")
             .width(Length::Fixed(180.0))
@@ -311,7 +266,7 @@ fn user_dict_view<'a>(
     items = items.push(
         row![
             selector,
-            text_input("搜索词条或编码…", &browse.query)
+            text_input("搜索词条或编码…", &browse.query).size(14).padding([8, 10])
                 .on_input(Message::DictQueryChanged)
                 .style(move |_t, s| text_input_style(colors, s))
                 .width(Length::Fill),
@@ -531,7 +486,7 @@ fn phrase_view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Elem
         toolbar = toolbar.push(
             pick_list(options, current, |chosen| {
                 Message::DictPhraseSchemaChanged(chosen.id)
-            })
+            }).text_size(14).padding([8, 10])
             .placeholder("选择方案")
             .width(Length::Fixed(180.0))
             .style(move |_theme, status| pick_list_style(colors, status)),
@@ -689,19 +644,19 @@ fn entry_add_dialog<'a>(
         text("词（上屏的文字）")
             .size(13)
             .color(colors.foreground_muted),
-        text_input("如：曦码", &draft.word)
+        text_input("如：曦码", &draft.word).size(14).padding([8, 10])
             .on_input(Message::DictEntryAddWordChanged)
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::Fill),
         text("编码").size(13).color(colors.foreground_muted),
-        text_input("如：jhdm", &draft.code)
+        text_input("如：jhdm", &draft.code).size(14).padding([8, 10])
             .on_input(Message::DictEntryAddCodeChanged)
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::Fill),
         text("频率（正整数，留空即 1）")
             .size(13)
             .color(colors.foreground_muted),
-        text_input("如：1", &draft.commits)
+        text_input("如：1", &draft.commits).size(14).padding([8, 10])
             .on_input(Message::DictEntryAddCommitsChanged)
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::Fill),
@@ -746,21 +701,21 @@ fn phrase_dialog_view<'a>(
         text("短语（上屏的文字）")
             .size(13)
             .color(colors.foreground_muted),
-        text_input("如：会议纪要见群公告", &dialog.word)
+        text_input("如：会议纪要见群公告", &dialog.word).size(14).padding([8, 10])
             .on_input(Message::DictPhraseDialogWordChanged)
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::Fill),
         text("编码（输入这串后短语进候选栏）")
             .size(13)
             .color(colors.foreground_muted),
-        text_input("如：hy", &dialog.code)
+        text_input("如：hy", &dialog.code).size(14).padding([8, 10])
             .on_input(Message::DictPhraseDialogCodeChanged)
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::Fill),
         text("权重（正整数，越大越靠前；留空走默认）")
             .size(13)
             .color(colors.foreground_muted),
-        text_input("如：99", &dialog.weight)
+        text_input("如：99", &dialog.weight).size(14).padding([8, 10])
             .on_input(Message::DictPhraseDialogWeightChanged)
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::Fill),

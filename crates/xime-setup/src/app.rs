@@ -106,6 +106,16 @@ pub fn update(state: &mut SettingsApp, message: Message) -> Task<Message> {
     match message {
         Message::PageSelected(i) => {
             state.settings.current_page = i;
+            // 设备关联页：进页重读配对表——用户可能刚在另一台设备上完成配对，
+            // 停在页面上看到旧列表会以为没成功。
+            #[cfg(feature = "pair-page")]
+            if crate::pages::sidebar_items()
+                .get(i)
+                .map(|(_, title)| *title)
+                == Some("设备关联")
+            {
+                state.settings.pair.refresh_peers();
+            }
             // 本地模型状态只在本页可见时轮询（进页立刻拉一次，离开就停）。
             #[cfg(feature = "voice-page")]
             {
@@ -765,8 +775,11 @@ pub fn update(state: &mut SettingsApp, message: Message) -> Task<Message> {
             state.settings.schema_dict_page(page);
         }
         #[cfg(feature = "clipboard-page")]
-        Message::SyncPluginEnabled(v) => {
-            state.settings.sync_plugin.set_enabled(v);
+        Message::SyncModeChanged(i) => {
+            state
+                .settings
+                .sync_plugin
+                .set_mode(crate::state::SyncMode::from_index(i));
         }
         #[cfg(feature = "clipboard-page")]
         Message::SyncPluginSelected(v) => {
@@ -781,9 +794,31 @@ pub fn update(state: &mut SettingsApp, message: Message) -> Task<Message> {
             state.settings.sync_plugin.start_test();
         }
         #[cfg(feature = "pair-page")]
-        Message::StartPairing => {
-            state.settings.show_message("功能开发中".to_string());
+        Message::PairTab(i) => state.settings.pair.set_tab(i),
+        #[cfg(feature = "pair-page")]
+        Message::PairShowCode => state.settings.pair.start_display(),
+        #[cfg(feature = "pair-page")]
+        Message::PairCancelCode => state.settings.pair.cancel_display(),
+        #[cfg(feature = "pair-page")]
+        Message::PairCodeInputChanged(value) => state.settings.pair.code_input = value,
+        #[cfg(feature = "pair-page")]
+        Message::PairJoin => state.settings.pair.start_join(),
+        #[cfg(feature = "pair-page")]
+        Message::PairManualToggle => {
+            state.settings.pair.show_manual = !state.settings.pair.show_manual;
         }
+        #[cfg(feature = "pair-page")]
+        Message::PairAddrInputChanged(value) => state.settings.pair.addr_input = value,
+        #[cfg(feature = "pair-page")]
+        Message::PairDeviceNameChanged(value) => state.settings.pair.device_name = value,
+        #[cfg(feature = "pair-page")]
+        Message::PairDeviceNameSave => state.settings.pair.save_device_name(),
+        #[cfg(feature = "pair-page")]
+        Message::PairRemoveRequest(did) => state.settings.pair.remove_confirm = Some(did),
+        #[cfg(feature = "pair-page")]
+        Message::PairRemoveCancel => state.settings.pair.remove_confirm = None,
+        #[cfg(feature = "pair-page")]
+        Message::PairRemoveConfirm(did) => state.settings.pair.remove_peer(&did),
         Message::BackgroundPoll => {
             let started = std::time::Instant::now();
             state.settings.poll_background();

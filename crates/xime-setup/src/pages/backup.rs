@@ -1,7 +1,8 @@
 #![cfg(feature = "backup-page")]
 use crate::components::settings::{settings_group, settings_item, settings_page};
 use crate::components::widgets::{
-    button_disabled, button_primary, button_secondary, label, text_button, text_input_style,
+    button_disabled, button_primary, button_secondary, label, pick_list_style, text_button,
+    text_input_style,
 };
 use crate::state::{Message, SettingsState};
 use crate::theme::ThemeColors;
@@ -30,7 +31,10 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
                 .position(|p| p.label() == chosen)
                 .unwrap_or(0),
         )
-    });
+    }).text_size(14).padding([8, 10])
+        // 显式宽度：Shrink 在这个位置会被左侧说明挤到只剩内边距，文字竖排。
+        .width(Length::Fixed(180.0))
+        .style(move |_theme, status| pick_list_style(colors, status));
 
     // 提供者相关配置项。
     let mut service_items: Vec<Element<'a, Message>> = vec![settings_item(
@@ -75,7 +79,7 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
                     let key = key.clone();
                     move |v: String| Message::BackupFieldChanged(key.clone(), v)
                 });
-                let input = text_input(field.placeholder.as_deref().unwrap_or(""), value)
+                let input = text_input(field.placeholder.as_deref().unwrap_or(""), value).size(14).padding([8, 10])
                     .on_input_maybe(on_input)
                     .secure(field.ftype == "secret")
                     .style(move |_t, s| text_input_style(colors, s))
@@ -102,20 +106,20 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
         }
     } else {
         // 内置 WebDAV 连接配置。
-        let url_input = text_input("https://dav.example.com/dav", &b.url)
+        let url_input = text_input("https://dav.example.com/dav", &b.url).size(14).padding([8, 10])
             .on_input_maybe(editable.then_some(Message::BackupUrlChanged))
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::FillPortion(2));
-        let user_input = text_input("用户名", &b.username)
+        let user_input = text_input("用户名", &b.username).size(14).padding([8, 10])
             .on_input_maybe(editable.then_some(Message::BackupUsernameChanged))
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::FillPortion(2));
-        let pass_input = text_input("", &b.password)
+        let pass_input = text_input("", &b.password).size(14).padding([8, 10])
             .on_input_maybe(editable.then_some(Message::BackupPasswordChanged))
             .secure(true)
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::FillPortion(2));
-        let dir_input = text_input("xime-backup", &b.remote_dir)
+        let dir_input = text_input("xime-backup", &b.remote_dir).size(14).padding([8, 10])
             .on_input_maybe(editable.then_some(Message::BackupDirChanged))
             .style(move |_t, s| text_input_style(colors, s))
             .width(Length::FillPortion(2));
@@ -165,7 +169,9 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
     let current_mode = MODES.get(b.mode as usize).copied().unwrap_or(MODES[0]);
     let mode_pick = pick_list(MODES, Some(current_mode), |chosen| {
         Message::BackupModeChanged(MODES.iter().position(|m| *m == chosen).unwrap_or(0) as u8)
-    });
+    }).text_size(14).padding([8, 10])
+        .width(Length::Fixed(180.0))
+        .style(move |_theme, status| pick_list_style(colors, status));
     groups.push(settings_group(
         "备份设置",
         None::<String>,

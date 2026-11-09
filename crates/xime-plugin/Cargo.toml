@@ -8,8 +8,11 @@ repository.workspace = true
 
 [dependencies]
 quickjs-rusty.workspace = true
-# 中断处理器签名需要 JSRuntime 类型（与 quickjs-rusty 同源的 FFI 绑定）
-libquickjs-ng-sys = "0.13.1"
+# 中断处理器签名需要 JSRuntime 类型（与 quickjs-rusty 同源的 FFI 绑定）。
+# 版本必须与 quickjs-rusty 内部依赖的 libquickjs-ng-sys 完全一致，否则
+# JSContext 会解析成两个不同类型，add_callback 全部报 E0308。
+# quickjs-rusty 0.15.0 → libquickjs-ng-sys 0.14.0，升级 quickjs-rusty 时同步这里。
+libquickjs-ng-sys = "0.14.0"
 serde = { workspace = true, features = ["derive"] }
 serde_yaml.workspace = true
 serde_json.workspace = true
@@ -29,9 +32,14 @@ base64.workspace = true
 aes-gcm.workspace = true
 getrandom.workspace = true
 
-# Linux 插件配置密钥存 Secret Service（KDE Wallet / GNOME Keyring）
-[target.'cfg(not(windows))'.dependencies]
+# 插件配置密钥的主密钥存放。按平台编译对应后端，避免一个平台拉另一平台的
+# 系统依赖（macOS 上开 sync-secret-service 会拉 dbus 且运行时不可用）。
+# Windows 走 DPAPI，不依赖 keyring。
+[target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
 
 [features]
 default = []

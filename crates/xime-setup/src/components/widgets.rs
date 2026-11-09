@@ -289,6 +289,12 @@ pub fn text_input_style(
 
 // ---- buttons ----
 
+/// 控件统一高度：输入框、下拉框、按钮都按这一档排版。
+///
+/// 以前每个控件各写各的 padding（按钮 30/32/34 三种高度混在一行里），
+/// 同一行左右控件会高低错开，看着像拼出来的。
+pub const CONTROL_HEIGHT: f32 = 34.0;
+
 /// 主要按钮：主色填充。
 pub fn button_primary<'a, Message: Clone>(
     label: impl Into<String>,
@@ -303,6 +309,7 @@ pub fn button_primary<'a, Message: Clone>(
             .color(colors.on_primary),
     )
     .padding([8, 18])
+    .height(CONTROL_HEIGHT)
     .style(move |_theme, status| primary_button_style(&colors, status))
     .on_press(on_press)
 }
@@ -320,7 +327,8 @@ pub fn button_secondary<'a, Message: Clone>(
             .font(medium())
             .color(colors.foreground),
     )
-    .padding([7, 14])
+    .padding([8, 14])
+    .height(CONTROL_HEIGHT)
     .style(move |_theme, status| secondary_button_style(&colors, status))
     .on_press(on_press)
 }
@@ -338,7 +346,8 @@ pub fn button_danger<'a, Message: Clone>(
             .font(medium())
             .color(colors.on_error),
     )
-    .padding([6, 14])
+    .padding([8, 14])
+    .height(CONTROL_HEIGHT)
     .style(move |_theme, status| danger_button_style(&colors, status))
     .on_press(on_press)
 }
@@ -351,7 +360,8 @@ pub fn button_disabled<'a, Message: 'a + Clone>(
 ) -> Element<'a, Message> {
     let colors = *colors;
     button(text(label.into()).size(14).color(colors.foreground_muted))
-        .padding([6, 14])
+        .padding([8, 14])
+        .height(CONTROL_HEIGHT)
         .style(move |_theme, _status| secondary_button_style(&colors, button::Status::Disabled))
         .into()
 }
@@ -369,7 +379,8 @@ pub fn text_button<'a, Message: Clone>(
             .font(medium())
             .color(colors.primary),
     )
-    .padding([8, 16])
+    .padding([8, 12])
+    .height(CONTROL_HEIGHT)
     .style(move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
@@ -573,7 +584,7 @@ pub fn number_input<'a, Message: Clone + 'a>(
             .align_y(Alignment::Center),
     )
     .width(140)
-    .height(36)
+    .height(CONTROL_HEIGHT)
     .style(move |_| container::Style {
         background: Some(Background::Color(colors.surface_variant)),
         border: Border {
@@ -584,4 +595,82 @@ pub fn number_input<'a, Message: Clone + 'a>(
         ..container::Style::default()
     })
     .into()
+}
+
+/// 分段标签栏：页内切换或二选一的分支（扩展商店、剪贴板、设备关联共用）。
+///
+/// 只收 `labels` + 当前项 + 消息构造器，样式不对外开放——这类控件一旦各页各写
+/// 一份，圆角或内边距就会一点点漂开，设置页立刻显出拼装感。
+pub fn tab_bar<'a, Message: Clone + 'a>(
+    labels: &[&'a str],
+    active: usize,
+    colors: &ThemeColors,
+    on_select: impl Fn(usize) -> Message,
+) -> Element<'a, Message> {
+    let colors = *colors;
+    let mut bar = row![].spacing(2).padding(2);
+
+    // 等宽标签：各段按最长的那条文字取宽，否则「关闭 / 同步插件 / 设备互传」
+    // 会按内容各占一块，整条控制看起来歪歪扭扭。
+    let cell = labels
+        .iter()
+        .map(|label_text| label_text.chars().count())
+        .max()
+        .unwrap_or(1) as f32
+        * 14.0
+        + 32.0;
+
+    for (i, label_text) in labels.iter().enumerate() {
+        let is_active = i == active;
+        let label_text = *label_text;
+        bar = bar.push(
+            button(
+                text(label_text)
+                    .size(14)
+                    .color(if is_active {
+                        colors.primary
+                    } else {
+                        colors.foreground_muted
+                    }),
+            )
+            .padding([0, 16])
+            .width(Length::Fixed(cell))
+            .height(CONTROL_HEIGHT - 4.0)
+            .style(move |_theme, status| {
+                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                button::Style {
+                    background: if is_active || hovered {
+                        Some(Background::Color(colors.surface))
+                    } else {
+                        None
+                    },
+                    text_color: if is_active {
+                        colors.primary
+                    } else {
+                        colors.foreground_muted
+                    },
+                    border: Border {
+                        color: Color::TRANSPARENT,
+                        width: 0.0,
+                        radius: border::radius(RADIUS_SM),
+                    },
+                    ..button::Style::default()
+                }
+            })
+            .on_press(on_select(i)),
+        );
+    }
+
+    container(bar)
+        .width(Length::Shrink)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(colors.surface_variant)),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: border::radius(RADIUS_MD),
+            },
+            ..container::Style::default()
+        })
+        .into()
 }

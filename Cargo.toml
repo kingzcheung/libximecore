@@ -14,6 +14,7 @@ members = [
     "crates/xime-sync-store",
     "crates/xime-sync-service",
     "crates/xime-sync-server",
+    "crates/xime-p2p",
 ]
 
 # xime-speech 的 sherpa-onnx-sys 需要预编译原生库（SHERPA_ONNX_LIB_DIR /
@@ -32,6 +33,7 @@ default-members = [
     "crates/xime-sync-store",
     "crates/xime-sync-service",
     "crates/xime-sync-server",
+    "crates/xime-p2p",
 ]
 
 [workspace.package]
@@ -53,8 +55,15 @@ tracing = "0.1"
 once_cell = "1"
 # 插件脚本引擎（QuickJS-NG 绑定，对齐 xime 3.0 Android 插件系统）
 # 注：0.14.0 的 serde 模块依赖 bigint 代码路径，两者需同时启用
-quickjs-rusty = { version = "0.14.0", default-features = false, features = ["serde", "bigint"] }
-sha1 = "0.10"
+quickjs-rusty = { version = "0.15.0", default-features = false, features = [
+    "serde",
+    "bigint",
+] }
+# sha1 仅用于插件契约 host.crypto.hmacSha1（腾讯云 WebSocket ASR 鉴权，
+# 见 plugins/tencent-asr/main.ts）——是对方服务端指定的算法，不能换成 sha256。
+# 不得用于本项目自身任何新的签名/校验逻辑；它是 digest trait 的消费者，
+# 因此版本必须与 hmac 同代，否则 Hmac<Sha1> 的泛型约束不满足。
+sha1 = "0.11"
 # 插件 manifest.json 宽松解析（注释/尾逗号，对齐 Android kotlinx lenient）
 json5 = "1.3.1"
 
@@ -62,29 +71,59 @@ json5 = "1.3.1"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws", "tokio"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "fs", "rt"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "signal",
+    "sync",
+    "time",
+    "fs",
+    "rt",
+] }
 tokio-stream = "0.1"
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 futures-util = "0.3"
-aes-gcm = "0.10"
-base64 = "0.22"
-getrandom = "0.3"
-config = "0.15"
-sha2 = "0.10"
+aes-gcm = "0.11.1"
+base64 = "0.23.1"
+getrandom = "0.4.3"
+config = "0.15.27"
+sha2 = "0.11.1"
 subtle = "2"
 http = "1"
-rusqlite = { version = "0.32", features = ["bundled"] }
-arboard = { version = "3", features = ["wayland-data-control"] }
-rfd = "0.15"
-hmac = "0.12"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+arboard = { version = "3.7.0", features = ["wayland-data-control"] }
+rfd = "0.18.0"
+hmac = "0.13"
 hex = "0.4"
-toml = "0.9"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "gzip", "rustls-tls-native-roots"] }
+toml = "1.2.1+spec-1.1.0"
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "gzip",
+    "rustls-tls-native-roots",
+] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
+
+# ---- 跨设备剪贴板 P2P（xime-p2p）----
+# 统一在 digest 0.11 / aead 0.11 / rand_core 0.9 一代：
+#   sha2 0.11 + hmac 0.13 + hkdf 0.13 + chacha20poly1305 0.11
+#   + ed25519-dalek 3 + x25519-dalek 3 + snow 0.10
+# 这一代不能和 digest 0.10 混用在同一处：`Hkdf::<Sha256>` 要求 Sha256 与
+# hkdf 依赖的 digest 版本一致，混了会报 trait bound 不满足，且报错指向泛型内部。
+hkdf = "0.13"
+chacha20poly1305 = "0.11"
+ed25519-dalek = "3"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+snow = "0.10"
+# spake2 最新稳定版仍是 0.4（0.5 只有 pre-release）。
+spake2 = "0.4"
 
 # 同步 crate 内部依赖
 xime-sync-domain = { path = "crates/xime-sync-domain" }
 xime-sync-store = { path = "crates/xime-sync-store" }
 xime-sync-service = { path = "crates/xime-sync-service" }
 xime-sync-server = { path = "crates/xime-sync-server" }
+
+# 跨设备剪贴板 P2P 传输
+xime-p2p = { path = "crates/xime-p2p" }

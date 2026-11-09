@@ -1,4 +1,3 @@
-#[cfg(any(windows, feature = "dict-page"))]
 use crate::components::widgets::text_input_style;
 use crate::components::widgets::{
     badge, button_danger, button_disabled, button_primary, button_secondary, card_style, semibold,
@@ -27,13 +26,13 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
             .color(colors.foreground),
         Space::new().width(Length::Fill),
         button_primary("部署方案", colors, Message::DeploySchemas),
-        button_primary("打开数据目录", colors, Message::OpenUserDataDir),
         button_secondary("导入方案", colors, Message::SchemaImportOpen),
+        button_secondary("打开数据目录", colors, Message::OpenUserDataDir),
     ]
     .align_y(Alignment::Center)
     .spacing(12);
 
-    let mut content = column![header, tab_bar(tab, colors)]
+    let mut content = column![header, schema_tab_bar(tab, colors)]
         .spacing(16)
         .padding(20)
         .width(Length::Fill);
@@ -278,62 +277,13 @@ pub fn import_dialog<'a>(
 }
 
 /// 分段标签：已安装 / 已下载 / 方案词表。
-fn tab_bar<'a>(active: usize, colors: &'a ThemeColors) -> Element<'a, Message> {
-    let colors = *colors;
+fn schema_tab_bar<'a>(active: usize, colors: &'a ThemeColors) -> Element<'a, Message> {
     // 「方案词表」tab 仅在启用词典机制时存在（Windows 恒开；Linux 走 dict-page）。
     #[cfg(any(windows, feature = "dict-page"))]
     let labels = ["已安装", "已下载", "方案词表"];
     #[cfg(not(any(windows, feature = "dict-page")))]
     let labels = ["已安装", "已下载"];
-    let mut bar = row![].spacing(2).padding(2);
-
-    for (i, label) in labels.iter().enumerate() {
-        let is_active = i == active;
-        let label = *label;
-        bar = bar.push(
-            button(text(label).size(14).color(if is_active {
-                colors.primary
-            } else {
-                colors.foreground_muted
-            }))
-            .padding([7, 16])
-            .style(move |_style, status| {
-                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-                button::Style {
-                    background: if is_active || hovered {
-                        Some(Background::Color(colors.surface))
-                    } else {
-                        None
-                    },
-                    text_color: if is_active {
-                        colors.primary
-                    } else {
-                        colors.foreground_muted
-                    },
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: border::radius(8.0),
-                    },
-                    ..button::Style::default()
-                }
-            })
-            .on_press(Message::SchemaTab(i)),
-        );
-    }
-
-    container(bar)
-        .width(Length::Shrink)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(colors.surface_variant)),
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: border::radius(10.0),
-            },
-            ..container::Style::default()
-        })
-        .into()
+    crate::components::widgets::tab_bar(&labels, active, colors, Message::SchemaTab)
 }
 
 /// 已安装方案列表 + 部署。
@@ -352,14 +302,24 @@ fn installed_tab<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> El
         settings.market_schema.installing.is_some() || settings.market_schema.downloading.is_some();
 
     if schemas.is_empty() {
+        let card_colors = colors;
         return container(
-            text("暂无已安装的方案")
-                .size(14)
-                .color(colors.foreground_muted),
+            column![
+                text("还没有安装任何输入方案")
+                    .size(14)
+                    .font(semibold())
+                    .color(colors.foreground),
+                text("点右上角「部署方案」从本地目录安装，或到「扩展商店」下载一个")
+                    .size(13)
+                    .color(colors.foreground_muted),
+            ]
+            .spacing(6)
+            .align_x(Alignment::Center),
         )
         .width(Length::Fill)
-        .padding(24)
+        .padding(32)
         .center_x(Length::Fill)
+        .style(move |_| card_style(&card_colors))
         .into();
     }
 
@@ -783,13 +743,14 @@ fn schema_dict_tab<'a>(
 
     if settings.input_schema.available_schemas.is_empty() {
         return container(
-            text("暂无已安装的方案，安装后可在这里查看方案的码表词条")
-                .size(14)
+            text("还没有安装任何输入方案，安装后可在这里查看方案的码表词条")
+                .size(13)
                 .color(colors.foreground_muted),
         )
         .width(Length::Fill)
-        .padding(24)
+        .padding(32)
         .center_x(Length::Fill)
+        .style(move |_| card_style(&colors))
         .into();
     }
 
@@ -838,7 +799,7 @@ fn schema_dict_tab<'a>(
     // 搜索行：输入关键词 + 重新读取。
     list = list.push(
         row![
-            text_input("搜索词条或编码…", &dict.query)
+            text_input("搜索词条或编码…", &dict.query).size(14).padding([8, 10])
                 .on_input(Message::SchemaDictQueryChanged)
                 .style(move |_t, s| text_input_style(&colors, s))
                 .width(Length::Fill),

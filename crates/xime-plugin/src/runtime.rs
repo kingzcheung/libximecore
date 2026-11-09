@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use libquickjs_ng_sys as q;
 use quickjs_rusty::serde::{from_js, to_js};
 use quickjs_rusty::{Arguments, Context, ContextError, ExecutionError, OwnedJsValue};
@@ -212,7 +212,11 @@ fn now_millis() -> i64 {
 }
 
 /// 中断处理器：超过 deadline（epoch 毫秒，0 = 无限制）时中断 JS 执行。
-unsafe extern "C" fn interrupt_handler(_rt: *mut q::JSRuntime, opaque: *mut c_void) -> c_int {
+///
+/// 签名须与 quickjs-ng 的 `typedef int JSInterruptHandler(JSContext*, void*)`
+/// 完全一致：首参是 `JSContext*`（不是 `JSRuntime*`）。libquickjs-ng-sys 0.14
+/// 起该 typedef 由 bindgen 生成，类型本身已含 `Option`，调用处不再包 `Some`。
+unsafe extern "C" fn interrupt_handler(_ctx: *mut q::JSContext, opaque: *mut c_void) -> c_int {
     let deadline = unsafe { &*(opaque as *const AtomicI64) };
     let d = deadline.load(Ordering::Relaxed);
     if d != 0 && now_millis() >= d {
@@ -480,10 +484,11 @@ impl PluginRuntime {
             subscribed_events,
         };
         // 字段声明顺序保证 context 先于 deadline 析构（handler 指向 deadline）。
-        runtime.context.set_interrupt_handler(
-            Some(interrupt_handler),
-            &*runtime.deadline as *const AtomicI64 as *mut c_void,
-        );
+        // 显式标注类型：fn item → fn pointer 的转换不会穿透 Option 的泛型参数。
+        let handler: q::JSInterruptHandler = Some(interrupt_handler);
+        runtime
+            .context
+            .set_interrupt_handler(handler, &*runtime.deadline as *const AtomicI64 as *mut c_void);
         Ok(runtime)
     }
 

@@ -30,7 +30,7 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
     let store = &settings.market_schema;
     let tab = store.store_tab;
 
-    let mut content = column![header(colors), tab_bar(tab, colors),]
+    let mut content = column![header(colors), store_tab_bar(tab, colors),]
         .spacing(16)
         .padding(20)
         .width(Length::Fill);
@@ -62,58 +62,13 @@ fn header<'a>(colors: &'a ThemeColors) -> Element<'a, Message> {
 }
 
 /// 一级 Tab：方案 / 模型 / 插件。
-fn tab_bar<'a>(active: usize, colors: &'a ThemeColors) -> Element<'a, Message> {
-    let colors = *colors;
-    let labels = ["方案", "模型", "插件"];
-    let mut bar = row![].spacing(2).padding(2);
-
-    for (i, label) in labels.iter().enumerate() {
-        let is_active = i == active;
-        let label = *label;
-        bar = bar.push(
-            button(text(label).size(14).color(if is_active {
-                colors.primary
-            } else {
-                colors.foreground_muted
-            }))
-            .padding([7, 16])
-            .style(move |_theme, status| {
-                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-                button::Style {
-                    background: if is_active || hovered {
-                        Some(Background::Color(colors.surface))
-                    } else {
-                        None
-                    },
-                    text_color: if is_active {
-                        colors.primary
-                    } else {
-                        colors.foreground_muted
-                    },
-                    border: Border {
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                        radius: border::radius(8.0),
-                    },
-                    ..button::Style::default()
-                }
-            })
-            .on_press(Message::StoreTab(i)),
-        );
-    }
-
-    container(bar)
-        .width(Length::Shrink)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(colors.surface_variant)),
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: border::radius(10.0),
-            },
-            ..container::Style::default()
-        })
-        .into()
+fn store_tab_bar<'a>(active: usize, colors: &'a ThemeColors) -> Element<'a, Message> {
+    crate::components::widgets::tab_bar(
+        &["方案", "模型", "插件"],
+        active,
+        colors,
+        Message::StoreTab,
+    )
 }
 
 /// 分类筛选 chips（横向滚动），第一个恒为「全部」。
@@ -1032,7 +987,7 @@ fn version_selector<'a>(
         return text(selected).size(13).color(colors.primary).into();
     }
     let colors = *colors;
-    pick_list(versions, Some(selected), move |v| on_select(id.clone(), v))
+    pick_list(versions, Some(selected), move |v| on_select(id.clone(), v)).text_size(14).padding([8, 10])
         .placeholder("版本")
         .padding([4, 8])
         .text_size(12)

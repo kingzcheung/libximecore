@@ -158,7 +158,7 @@ fn model_card<'a>(
     })
     .placeholder("选择模型")
     .text_size(14)
-    .padding([6, 10])
+    .padding([8, 10])
     .width(Length::Fixed(360.0))
     .style(move |_theme, status| pick_list_style(colors, status));
     items.push(row![selector].spacing(8).align_y(Alignment::Center).into());

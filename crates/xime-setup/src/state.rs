@@ -711,9 +711,9 @@ pub enum Message {
     ServerPasswordChanged(String),
     #[cfg(feature = "clipboard-page")]
     OpenSyncDataDir,
-    /// 剪贴板同步插件：启用开关。
+    /// 剪贴板同步：切换同步方式（0 关闭 / 1 同步插件 / 2 局域网直连）。
     #[cfg(feature = "clipboard-page")]
-    SyncPluginEnabled(bool),
+    SyncModeChanged(usize),
     /// 剪贴板同步插件：选择插件。
     #[cfg(feature = "clipboard-page")]
     SyncPluginSelected(usize),
@@ -881,8 +881,42 @@ pub enum Message {
     /// 方案词表：词条列表翻页。
     #[cfg(any(windows, feature = "dict-page"))]
     SchemaDictPage(usize),
+    /// 设备关联：切换配对方向（0 显示码 / 1 输入码）。
     #[cfg(feature = "pair-page")]
-    StartPairing,
+    PairTab(usize),
+    /// 设备关联：生成动态码并开始等待对端。
+    #[cfg(feature = "pair-page")]
+    PairShowCode,
+    /// 设备关联：取消等待。
+    #[cfg(feature = "pair-page")]
+    PairCancelCode,
+    /// 设备关联：输入码变化。
+    #[cfg(feature = "pair-page")]
+    PairCodeInputChanged(String),
+    /// 设备关联：用输入的码连接对端。
+    #[cfg(feature = "pair-page")]
+    PairJoin,
+    /// 设备关联：展开/收起手动地址。
+    #[cfg(feature = "pair-page")]
+    PairManualToggle,
+    /// 设备关联：手动地址变化。
+    #[cfg(feature = "pair-page")]
+    PairAddrInputChanged(String),
+    /// 设备关联：设备名变化。
+    #[cfg(feature = "pair-page")]
+    PairDeviceNameChanged(String),
+    /// 设备关联：保存设备名。
+    #[cfg(feature = "pair-page")]
+    PairDeviceNameSave,
+    /// 设备关联：请求移除设备（两步确认）。
+    #[cfg(feature = "pair-page")]
+    PairRemoveRequest(String),
+    /// 设备关联：取消移除。
+    #[cfg(feature = "pair-page")]
+    PairRemoveCancel,
+    /// 设备关联：确认移除。
+    #[cfg(feature = "pair-page")]
+    PairRemoveConfirm(String),
     /// 订阅轮询：后台任务结果。
     BackgroundPoll,
 }
@@ -1556,6 +1590,8 @@ impl SettingsState {
         self.poll_schema_dict();
         #[cfg(all(feature = "voice-page", windows))]
         self.speech.poll();
+        #[cfg(feature = "pair-page")]
+        self.pair.poll();
         // 本地模型状态：只在本页可见时真的发 IPC（见 SpeechModelState::poll）。
         #[cfg(feature = "voice-page")]
         self.speech_server.poll();
@@ -2801,9 +2837,599 @@ pub struct SmartSuggestionState {
     pub learning_threshold: i32,
 }
 
+// ------------------------------------------------------------------
+// 设备关联（pair-page）：局域网 P2P 配对
+// ------------------------------------------------------------------
+
+/// P2P 数据目录（长期身份 + 已配对表），设置应用与输入法共用。
+///
+/// 取用户数据目录的父级：输入法的数据库目录就是它（macOS 是
+/// `~/Library/Application Support/XimeYi`，rime 用户目录在其下的 `rime/`）。
+/// 两端必须指向同一个 `p2p/`——各写各的，就成了「设置里配对成功、输入法
+/// 仍认为没配对」，而界面上看不出任何异常。
 #[cfg(feature = "pair-page")]
-#[derive(Clone, Default)]
-pub struct PairState {}
+pub fn p2p_dir() -> std::path::PathBuf {
+    let (_, user_data_dir) = get_data_dirs();
+    user_data_dir
+        .parent()
+        .map(|root| root.join("p2p"))
+        .unwrap_or_else(|| user_data_dir.join("p2p"))
+}
+
+#[cfg(feature = "pair-page")]
+fn device_file(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("device.json")
+}
+
+#[cfg(feature = "pair-page")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DeviceFile {
+    #[serde(default)]
+    name: String,
+}
+
+/// 首次配对时给本机起个名：环境变量 → `hostname` → 兜底。
+///
+/// 名字只用于让对方在列表里认出这台设备，不参与任何校验（校验一律用 did）。
+#[cfg(feature = "pair-page")]
+fn default_device_name() -> String {
+    if let Ok(name) = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")) {
+        let name = name.trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    // macOS 默认不导出 HOSTNAME 环境变量，`hostname` 命令三个平台都有。
+    if let Ok(out) = std::process::Command::new("hostname").output() {
+        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !name.is_empty() {
+            // macOS 返回的是 `MacBook-Pro.local`，`.local` 对用户没有意义。
+            return name.strip_suffix(".local").unwrap_or(&name).to_string();
+        }
+    }
+    "我的设备".to_string()
+}
+
+#[cfg(feature = "pair-page")]
+fn read_device_name(dir: &std::path::Path) -> String {
+    std::fs::read_to_string(device_file(dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<DeviceFile>(&raw).ok())
+        .map(|f| f.name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(default_device_name)
+}
+
+#[cfg(feature = "pair-page")]
+fn write_device_name(dir: &std::path::Path, name: &str) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("数据目录创建失败：{e}"))?;
+    let json = serde_json::to_string_pretty(&DeviceFile {
+        name: name.to_string(),
+    })
+    .map_err(|e| format!("序列化设备名失败：{e}"))?;
+    std::fs::write(device_file(dir), json).map_err(|e| format!("写入设备名失败：{e}"))
+}
+
+/// 后台配对线程回传的事件。UI 由 `poll` 取走。
+#[cfg(feature = "pair-page")]
+#[derive(Debug, Clone)]
+enum PairKind {
+    /// 显示端：对端已连入并完成配对。
+    DisplayPaired { name: String },
+    /// 显示端：会话结束（过期 / 取消 / 出错）。
+    DisplayEnded { reason: String, cancelled: bool },
+    /// 输入端：配对成功。
+    JoinPaired { name: String },
+    /// 输入端：失败（文案已翻成人话）。
+    JoinFailed(String),
+}
+
+/// 后台线程回传的事件。
+///
+/// 带会话号的原因：用户取消后立刻重新生成码时，旧线程的收尾事件会晚到，
+/// 没有会话号的话它会把**新**会话的状态清掉——表现为点了「重新生成」后
+/// 界面一闪又回到初始态，且取消按钮失灵。
+#[cfg(feature = "pair-page")]
+#[derive(Debug, Clone)]
+struct PairEvent {
+    session: u64,
+    kind: PairKind,
+}
+
+/// 进行中的显示端会话（码 + 起始时刻 + 端口）。
+#[cfg(feature = "pair-page")]
+#[derive(Clone)]
+pub struct DisplayInfo {
+    /// 显示用动态码，形如 `482 719`。
+    pub code: String,
+    /// 起算时刻，用于倒计时。
+    pub started: std::time::Instant,
+    /// 实际监听端口（端口被占时会顺延，排障时用得上）。
+    pub port: u16,
+}
+
+/// 配对页当前显示哪一个方向。
+///
+/// 两个方向互斥：同一时刻用户只可能在「让对方输」或「输对方的码」，并排摆
+/// 会同时出现两个主按钮，谁都不知道该点哪个。
+#[cfg(feature = "pair-page")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PairTab {
+    /// 本机显示码（默认：这一步在时间上必然先发生）。
+    #[default]
+    Display,
+    /// 输入对方显示的码。
+    Join,
+}
+
+#[cfg(feature = "pair-page")]
+impl PairTab {
+    pub fn index(self) -> usize {
+        match self {
+            Self::Display => 0,
+            Self::Join => 1,
+        }
+    }
+
+    /// 超出范围一律回到默认：标签栏索引来自界面，不值得为它引入错误态。
+    pub fn from_index(i: usize) -> Self {
+        match i {
+            1 => Self::Join,
+            _ => Self::Display,
+        }
+    }
+}
+
+/// 已配对设备的一行（界面直接用）。
+#[cfg(feature = "pair-page")]
+#[derive(Clone)]
+pub struct PeerRow {
+    pub did: String,
+    pub name: String,
+    /// did 前 8 位：同名设备靠它区分。
+    pub short: String,
+    pub last_addr: Option<String>,
+}
+
+#[cfg(feature = "pair-page")]
+#[derive(Clone)]
+pub struct PairState {
+    /// 本机设备名（可编辑，落盘到 `p2p/device.json`）。
+    pub device_name: String,
+    /// 当前显示的配对方向。
+    pub tab: PairTab,
+    /// 本机 did（32 位 hex），未生成时为空。
+    pub did: String,
+    /// 输入端：用户输入的 6 位码。
+    pub code_input: String,
+    /// 手动地址兜底（广播不可达时用）：IP 或 IP:端口。
+    pub addr_input: String,
+    /// 是否展开手动地址输入。
+    pub show_manual: bool,
+    /// 进行中的显示端会话。
+    pub display: Option<DisplayInfo>,
+    /// 输入端是否正在连接。
+    pub joining: bool,
+    /// 已配对设备。
+    pub peers: Vec<PeerRow>,
+    /// 读配对表失败的原因（表损坏时必须显式告诉用户，不能装作没有设备）。
+    pub peer_error: Option<String>,
+    /// 等待二次确认移除的 did。
+    pub remove_confirm: Option<String>,
+    /// 页面内状态消息（文案, 是否错误）。
+    pub message: Option<(String, bool)>,
+    /// 后台线程 → UI 的事件队列。
+    events: std::sync::Arc<Mutex<Vec<PairEvent>>>,
+    /// 显示端取消句柄（会话本体已移进等待线程）。
+    display_stop: Option<xime_p2p::StopHandle>,
+    /// P2P 数据目录（身份 + 配对表）。默认 [`p2p_dir`]，宿主可覆盖。
+    dir: std::path::PathBuf,
+    /// 显示端会话号：每次重新生成码递增，用于丢弃旧线程的迟到事件。
+    display_session: u64,
+    /// 输入端会话号，作用同上。
+    join_session: u64,
+}
+
+#[cfg(feature = "pair-page")]
+impl Default for PairState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "pair-page")]
+impl PairState {
+    pub fn new() -> Self {
+        Self::with_dir(p2p_dir())
+    }
+
+    /// 指定数据目录构造。测试与需要自定义路径的宿主用；
+    /// 界面侧一律走 [`Self::new`]，避免同一台机器上出现两份身份。
+    pub fn with_dir(dir: std::path::PathBuf) -> Self {
+        let mut state = Self {
+            device_name: read_device_name(&dir),
+            tab: PairTab::default(),
+            did: String::new(),
+            code_input: String::new(),
+            addr_input: String::new(),
+            show_manual: false,
+            display: None,
+            joining: false,
+            peers: Vec::new(),
+            peer_error: None,
+            remove_confirm: None,
+            message: None,
+            events: std::sync::Arc::new(Mutex::new(Vec::new())),
+            display_stop: None,
+            dir,
+            display_session: 0,
+            join_session: 0,
+        };
+        state.refresh_did();
+        state.refresh_peers();
+        state
+    }
+
+    /// 数据目录（界面排障时展示用）。
+    pub fn dir(&self) -> &std::path::Path {
+        &self.dir
+    }
+
+    /// 读（必要时生成）本机长期身份，取 did 供界面展示。
+    fn refresh_did(&mut self) {
+        let dir = self.dir.clone();
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        self.did = xime_p2p::load_or_create_identity(&dir)
+            .map(|id| id.did().to_hex())
+            .unwrap_or_default();
+    }
+
+    /// did 前 8 位（界面展示用）。
+    pub fn did_short(&self) -> String {
+        self.did.chars().take(8).collect()
+    }
+
+    /// 重新读已配对表。
+    ///
+    /// 配对表损坏时不能静默当空表——那会让用户以为设备丢了而重新配对，
+    /// 掩盖真正的文件问题。
+    pub fn refresh_peers(&mut self) {
+        match xime_p2p::PeerStore::load(self.dir.join("peers.json")) {
+            Ok(store) => {
+                self.peers = store
+                    .all()
+                    .map(|peer| PeerRow {
+                        did: peer.did.clone(),
+                        name: peer.name.clone(),
+                        short: peer.did.chars().take(8).collect(),
+                        last_addr: peer.last_addr.clone(),
+                    })
+                    .collect();
+                self.peer_error = None;
+            }
+            Err(e) => {
+                self.peer_error = Some(e.user_hint());
+            }
+        }
+    }
+
+    /// 切换配对方向。
+    ///
+    /// 只改视图：已开的显示端会话与进行中的连接都继续跑。切走就中断会话会让
+    /// 「看一眼输入框」这种误触直接废掉已经生成的码。
+    pub fn set_tab(&mut self, i: usize) {
+        self.tab = PairTab::from_index(i);
+    }
+
+    /// 生成动态码并开始等待对端连入。
+    pub fn start_display(&mut self) {
+        // 已有会话且码还没过期：重复点击没有意义（会白占一个监听端口）。
+        // 码已过期时旧线程正在收尾，先叫停再重建，用户点「重新生成」才不落空。
+        if self.display.is_some() {
+            if self.display_remaining().unwrap_or(0) > 0 {
+                return;
+            }
+            self.cancel_display();
+        }
+        self.message = None;
+
+        // 旧会话的取消句柄若还在（线程已收尾但界面没收到事件），先叫停。
+        if let Some(stop) = self.display_stop.take() {
+            stop.cancel();
+        }
+
+        let dir = self.dir.clone();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.message = Some((format!("数据目录创建失败：{e}"), true));
+            return;
+        }
+        let Some(identity) = xime_p2p::load_or_create_identity(&dir) else {
+            self.message = Some(("身份不可用（系统随机源异常）".to_string(), true));
+            return;
+        };
+        let store_path = dir.join("peers.json");
+        let name = self.device_name_for_pairing();
+
+        let mut display = match xime_p2p::DisplaySession::start(identity, store_path, name) {
+            Ok(session) => session,
+            Err(e) => {
+                self.message = Some((format!("无法开始配对：{}", e.user_hint()), true));
+                return;
+            }
+        };
+
+        self.display_session += 1;
+        let session_id = self.display_session;
+
+        let code = display.code_text();
+        let port = display.local_port().unwrap_or(0);
+        let stop = display.stop_handle();
+        // 线程里要判断「是用户取消还是真的过期」，需要一份句柄；
+        // 界面侧那份用于取消，两者指向同一个原子标志。
+        let stop_for_thread = stop.clone();
+        let events = std::sync::Arc::clone(&self.events);
+        std::thread::spawn(move || {
+            // 比码的有效期多等 5 秒：`wait` 自己会先因过期返回，
+            // 这里的余量只是兜底，避免线程因时钟粒度提前退出。
+            let result = display.wait(xime_p2p::CODE_TTL + std::time::Duration::from_secs(5));
+            let cancelled = stop_for_thread.is_cancelled();
+            let kind = match result {
+                Ok(public) => PairKind::DisplayPaired {
+                    name: public.name().to_string(),
+                },
+                Err(e) => PairKind::DisplayEnded {
+                    reason: e.user_hint(),
+                    cancelled,
+                },
+            };
+            push_event(
+                &events,
+                PairEvent {
+                    session: session_id,
+                    kind,
+                },
+            );
+        });
+
+        self.display = Some(DisplayInfo {
+            code,
+            started: std::time::Instant::now(),
+            port,
+        });
+        self.display_stop = Some(stop);
+        self.refresh_did();
+    }
+
+    /// 取消显示端等待（用户点「取消」或关掉码）。
+    pub fn cancel_display(&mut self) {
+        if let Some(stop) = self.display_stop.take() {
+            stop.cancel();
+        }
+        self.display = None;
+        self.message = None;
+    }
+
+    /// 剩余有效秒数（无会话时 None）。
+    pub fn display_remaining(&self) -> Option<u64> {
+        self.display.as_ref().map(|info| {
+            xime_p2p::CODE_TTL
+                .saturating_sub(info.started.elapsed())
+                .as_secs()
+        })
+    }
+
+    /// 倒计时进度（1.0 = 刚生成，0.0 = 已过期）。
+    pub fn display_progress(&self) -> f32 {
+        let ttl = xime_p2p::CODE_TTL.as_secs() as f32;
+        self.display_remaining()
+            .map(|secs| secs as f32 / ttl)
+            .unwrap_or(0.0)
+    }
+
+    /// 输入端：用另一台设备显示的码完成配对。
+    pub fn start_join(&mut self) {
+        if self.joining {
+            return;
+        }
+        let code = self.code_input.trim().to_string();
+        if code.chars().filter(|c| c.is_ascii_digit()).count() != 6 {
+            self.message = Some(("请输入另一台设备显示的 6 位数字码".to_string(), true));
+            return;
+        }
+
+        let manual = if self.show_manual {
+            match parse_pair_addr(&self.addr_input) {
+                Some(addr) => Some(addr),
+                None => {
+                    self.message = Some((
+                        "地址格式不对：填 IP（如 192.168.1.5）或 IP:端口".to_string(),
+                        true,
+                    ));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
+        let dir = self.dir.clone();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.message = Some((format!("数据目录创建失败：{e}"), true));
+            return;
+        }
+        let Some(identity) = xime_p2p::load_or_create_identity(&dir) else {
+            self.message = Some(("身份不可用（系统随机源异常）".to_string(), true));
+            return;
+        };
+        let store_path = dir.join("peers.json");
+        let name = self.device_name_for_pairing();
+        let events = std::sync::Arc::clone(&self.events);
+
+        self.message = None;
+        self.joining = true;
+        self.join_session += 1;
+        let session_id = self.join_session;
+
+        std::thread::spawn(move || {
+            // 两条路径都要用身份 / 配对表 / 设备名，只有其中一条会被真正执行，
+            // 所以第一条路径用 clone（Arc 与几字节字符串，成本可忽略）。
+            let result = if let Some(addr) = manual {
+                // 手填地址时不必等发现，10 秒足够判连不通。
+                xime_p2p::join_at(
+                    std::sync::Arc::clone(&identity),
+                    store_path.clone(),
+                    &code,
+                    name.clone(),
+                    addr,
+                    PAIR_TIMEOUT_MANUAL,
+                )
+            } else {
+                // 自动发现：最长等一个码的有效期（对端可能刚点开显示）。
+                xime_p2p::join(identity, store_path, &code, name, PAIR_TIMEOUT_AUTO)
+            };
+            let kind = match result {
+                Ok(public) => PairKind::JoinPaired {
+                    name: public.name().to_string(),
+                },
+                Err(e) => PairKind::JoinFailed(e.user_hint()),
+            };
+            push_event(
+                &events,
+                PairEvent {
+                    session: session_id,
+                    kind,
+                },
+            );
+        });
+    }
+
+    /// 二次确认后移除一台设备。
+    pub fn remove_peer(&mut self, did: &str) {
+        let path = self.dir.join("peers.json");
+        let outcome = xime_p2p::PeerStore::load(&path).and_then(|mut store| store.remove(did));
+        self.remove_confirm = None;
+        match outcome {
+            Ok(_) => {
+                self.refresh_peers();
+                self.message = Some(("已移除该设备".to_string(), false));
+            }
+            Err(e) => self.message = Some((e.user_hint(), true)),
+        }
+    }
+
+    /// 保存设备名（写盘，下次配对/同步时告知对端）。
+    pub fn save_device_name(&mut self) {
+        let name = self.device_name.trim().to_string();
+        if name.is_empty() {
+            self.message = Some(("设备名不能为空".to_string(), true));
+            return;
+        }
+        self.device_name = name.clone();
+        let dir = self.dir.clone();
+        match write_device_name(&dir, &name) {
+            Ok(()) => self.message = Some(("设备名已保存".to_string(), false)),
+            Err(e) => self.message = Some((e, true)),
+        }
+    }
+
+    /// 取走后台线程的结果（由 250ms 轮询调用）。
+    pub fn poll(&mut self) {
+        let events = {
+            let Ok(mut queue) = self.events.lock() else {
+                return;
+            };
+            if queue.is_empty() {
+                return;
+            }
+            std::mem::take(&mut *queue)
+        };
+        for event in events {
+            self.apply(event);
+        }
+    }
+
+    fn apply(&mut self, event: PairEvent) {
+        match event.kind {
+            PairKind::DisplayPaired { name } => {
+                if event.session != self.display_session {
+                    return;
+                }
+                self.display = None;
+                self.display_stop = None;
+                self.refresh_peers();
+                self.message = Some((format!("已与「{name}」配对完成"), false));
+            }
+            PairKind::DisplayEnded { reason, cancelled } => {
+                if event.session != self.display_session {
+                    return;
+                }
+                // 用户已经点了取消：界面状态早就清了，这条只是线程的收尾通知。
+                let still_showing = self.display.take().is_some();
+                self.display_stop = None;
+                if still_showing && !cancelled {
+                    self.message = Some((reason, true));
+                }
+            }
+            PairKind::JoinPaired { name } => {
+                if event.session != self.join_session {
+                    return;
+                }
+                self.joining = false;
+                self.code_input.clear();
+                self.refresh_peers();
+                self.message = Some((format!("已与「{name}」配对完成"), false));
+            }
+            PairKind::JoinFailed(reason) => {
+                if event.session != self.join_session {
+                    return;
+                }
+                self.joining = false;
+                self.message = Some((reason, true));
+            }
+        }
+    }
+
+    fn device_name_for_pairing(&self) -> String {
+        let name = self.device_name.trim();
+        if name.is_empty() {
+            default_device_name()
+        } else {
+            name.to_string()
+        }
+    }
+}
+
+#[cfg(feature = "pair-page")]
+fn push_event(events: &Mutex<Vec<PairEvent>>, event: PairEvent) {
+    if let Ok(mut queue) = events.lock() {
+        queue.push(event);
+    }
+}
+
+/// 输入端等待上限：自动发现等一个码的有效期，手填地址只需判连通。
+#[cfg(feature = "pair-page")]
+const PAIR_TIMEOUT_AUTO: std::time::Duration = std::time::Duration::from_secs(60);
+#[cfg(feature = "pair-page")]
+const PAIR_TIMEOUT_MANUAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 解析手动地址：`1.2.3.4` 补默认配对端口，`1.2.3.4:5000` 原样用。
+#[cfg(feature = "pair-page")]
+fn parse_pair_addr(input: &str) -> Option<std::net::SocketAddr> {
+    use std::net::{IpAddr, SocketAddr};
+    let raw = input.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(addr) = raw.parse::<SocketAddr>() {
+        return Some(addr);
+    }
+    if let Ok(ip) = raw.parse::<IpAddr>() {
+        return Some(SocketAddr::new(ip, xime_p2p::PAIR_PORT));
+    }
+    None
+}
 
 #[cfg(feature = "clipboard-page")]
 pub struct ClipboardState {
@@ -3070,12 +3696,97 @@ pub struct ClipboardSyncPluginInfo {
 
 /// 插件同步配置（clipboard_sync.toml，与 IME 共享）。
 #[cfg(feature = "clipboard-page")]
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ClipboardSyncConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub plugin_id: String,
+    /// 传输方式：`plugin`（经插件/服务器）或 `p2p`（局域网直连）。
+    ///
+    /// 老配置里没有这个字段，必须默认成 `plugin`——默认成 `p2p` 会让所有存量
+    /// 服务器用户升级后静默停同步（IME 那边只有一句「未配对」的日志）。
+    #[serde(default = "default_transport")]
+    pub transport: String,
+}
+
+#[cfg(feature = "clipboard-page")]
+pub fn default_transport() -> String {
+    "plugin".to_string()
+}
+
+#[cfg(feature = "clipboard-page")]
+impl Default for ClipboardSyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            plugin_id: String::new(),
+            transport: default_transport(),
+        }
+    }
+}
+
+/// 剪贴板同步的三种状态。
+///
+/// 原来是「启用开关 + plugin_id 非空」两个条件拼出同一件事，界面上说不清：
+/// 开关开着但没选插件时到底同不同步？合成一个显式状态后，UI 与 IME 的判断
+/// 是同一个函数（[`Self::enabled`] / [`Self::transport`]），不会各说各话。
+#[cfg(feature = "clipboard-page")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    /// 完全关闭。
+    Off,
+    /// 经 clipboard_sync 插件（WebDAV / 自建 ximed 等）。
+    Plugin,
+    /// 局域网直连，不经任何服务器。
+    P2p,
+}
+
+#[cfg(feature = "clipboard-page")]
+impl SyncMode {
+    /// 分段选择器的文案，顺序与 [`Self::index`] 一致。
+    pub const LABELS: [&'static str; 3] = ["关闭", "同步插件", "设备互传"];
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Off => 0,
+            Self::Plugin => 1,
+            Self::P2p => 2,
+        }
+    }
+
+    /// 越界索引一律落到「关闭」：索引来自界面，不值得为它引入错误态。
+    pub fn from_index(i: usize) -> Self {
+        match i {
+            1 => Self::Plugin,
+            2 => Self::P2p,
+            _ => Self::Off,
+        }
+    }
+
+    /// 由配置还原（IME 侧 `desired_key` 用同一套判定）。
+    pub fn from_config(cfg: &ClipboardSyncConfig) -> Self {
+        if !cfg.enabled {
+            Self::Off
+        } else if cfg.transport == "p2p" {
+            Self::P2p
+        } else {
+            // 未识别的值按插件处理：宁可保持既有行为，也不要因为一个拼错的
+            // 字段就让同步静默失效。
+            Self::Plugin
+        }
+    }
+
+    pub fn enabled(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    pub fn transport(self) -> &'static str {
+        match self {
+            Self::P2p => "p2p",
+            _ => "plugin",
+        }
+    }
 }
 
 #[cfg(feature = "clipboard-page")]
@@ -3088,7 +3799,12 @@ pub fn read_clipboard_sync_config() -> ClipboardSyncConfig {
     let Ok(content) = std::fs::read_to_string(clipboard_sync_config_path()) else {
         return Default::default();
     };
-    toml::from_str(&content).unwrap_or_default()
+    let mut cfg: ClipboardSyncConfig = toml::from_str(&content).unwrap_or_default();
+    // 手写配置时可能留下 `transport = ""`，按默认值处理，别让它变成「第三种」。
+    if cfg.transport.trim().is_empty() {
+        cfg.transport = default_transport();
+    }
+    cfg
 }
 
 #[cfg(feature = "clipboard-page")]
@@ -4563,20 +5279,24 @@ fn parse_weight_input(raw: &str) -> Result<Option<i32>, String> {
     Ok(Some(value))
 }
 
-/// 剪贴板同步插件的页面状态（开关 + 选择 + 配置表单）。
+/// 剪贴板同步插件的页面状态（同步方式 + 插件选择 + 配置表单）。
 #[cfg(feature = "clipboard-page")]
 #[derive(Clone)]
 pub struct SyncPluginUiState {
-    /// 是否启用插件同步（写入 clipboard_sync.toml，IME 常驻循环热加载）。
-    pub enabled: bool,
+    /// 同步方式（写入 clipboard_sync.toml，IME 常驻循环热加载）。
+    pub mode: SyncMode,
     /// 已安装的 clipboard_sync 插件。
     pub plugins: Vec<ClipboardSyncPluginInfo>,
     /// 当前选中的插件下标。
     pub plugin_index: usize,
     /// 插件配置表单（schema + 当前值）。
     pub fields: Vec<(xime_plugin::SettingField, String)>,
+    /// 已配对设备名（仅局域网直连模式用；每帧读盘太贵，见 `poll_p2p_peers`）。
+    pub p2p_peers: Vec<String>,
     pub message: Option<String>,
     pub busy: Option<&'static str>,
+    /// 上次刷新配对表的时刻（1 秒节流）。
+    last_peer_check: Option<std::time::Instant>,
 }
 
 #[cfg(feature = "clipboard-page")]
@@ -4599,13 +5319,16 @@ impl Default for SyncPluginUiState {
             .position(|p| p.id == cfg.plugin_id)
             .unwrap_or(0);
         let mut st = Self {
-            enabled: cfg.enabled,
+            mode: SyncMode::from_config(&cfg),
             plugins,
             plugin_index,
             fields: Vec::new(),
+            p2p_peers: Vec::new(),
             message: None,
             busy: None,
+            last_peer_check: None,
         };
+        st.refresh_p2p_peers();
         st.start_schema_load();
         st
     }
@@ -4665,17 +5388,70 @@ impl SyncPluginUiState {
         });
     }
 
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
+    /// 切换同步方式（关闭 / 同步插件 / 局域网直连）。
+    ///
+    /// `enabled` 与 `transport` 一次写完：IME 每轮热加载这两个字段，分两次写会
+    /// 出现「已启用但传输方式还是旧的」的瞬时态（比如切到 P2P 时先 enable，
+    /// 那一轮仍按 plugin 发起请求）。
+    pub fn set_mode(&mut self, mode: SyncMode) {
+        if mode == self.mode {
+            return;
+        }
+        self.mode = mode;
         let mut cfg = read_clipboard_sync_config();
-        cfg.enabled = enabled;
+        cfg.enabled = mode.enabled();
+        cfg.transport = mode.transport().to_string();
         write_clipboard_sync_config(&cfg);
         notify_daemon_reload_plugins();
-        self.message = Some(if enabled {
-            "插件同步已启用".to_string()
-        } else {
-            "插件同步已停用".to_string()
-        });
+        if mode == SyncMode::P2p {
+            self.refresh_p2p_peers();
+        }
+        self.message = Some(
+            match mode {
+                SyncMode::Off => "已关闭剪贴板同步",
+                SyncMode::Plugin => "已切换为同步插件",
+                SyncMode::P2p => {
+                    if self.p2p_peers.is_empty() {
+                        "已切换为设备互传；还没有配对的设备，去「设备关联」加一台"
+                    } else {
+                        "已切换为设备互传"
+                    }
+                }
+            }
+            .to_string(),
+        );
+    }
+
+    /// 同步是否启用（保留给只关心开关的调用方）。
+    pub fn enabled(&self) -> bool {
+        self.mode.enabled()
+    }
+
+    /// 读已配对设备名。配对表损坏时按「没有设备」处理——
+    /// 这里只是给界面看个数量，真正的拒绝发生在 IME 侧握手。
+    fn refresh_p2p_peers(&mut self) {
+        #[cfg(feature = "pair-page")]
+        {
+            self.p2p_peers = xime_p2p::PeerStore::load(p2p_dir().join("peers.json"))
+                .map(|store| store.all().map(|p| p.name.clone()).collect())
+                .unwrap_or_default();
+        }
+    }
+
+    /// 直连模式下每秒刷新一次配对表：用户刚在「设备关联」页配完就切回来时，
+    /// 这里不能还显示「还没有配对设备」。
+    fn poll_p2p_peers(&mut self) {
+        if self.mode != SyncMode::P2p {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_peer_check {
+            if now.duration_since(last) < std::time::Duration::from_secs(1) {
+                return;
+            }
+        }
+        self.last_peer_check = Some(now);
+        self.refresh_p2p_peers();
     }
 
     pub fn select(&mut self, index: usize) {
@@ -4730,9 +5506,9 @@ impl SyncPluginUiState {
             let _ = std::fs::write(path, yaml);
         }
         // 配置保存 ≠ 启用同步：开关未开时明确提示，避免「配了但不推送」的困惑。
-        if !self.enabled {
+        if !self.enabled() {
             self.message =
-                Some("配置已保存；当前同步未启用，请先打开「启用剪贴板同步」开关".to_string());
+                Some("配置已保存；当前同步未开启，请先选择「同步插件」".to_string());
         }
     }
 
@@ -4756,6 +5532,7 @@ impl SyncPluginUiState {
 
     /// 轮询后台结果。
     pub fn poll(&mut self) {
+        self.poll_p2p_peers();
         let outcome = SYNC_PLUGIN_OUTCOME.lock().unwrap().take();
         let Some(outcome) = outcome else {
             return;
@@ -7236,5 +8013,211 @@ mod dict_edit_tests {
         assert!(dict
             .status_text()
             .contains(&format!("只列出前 {DICT_ENTRIES_MAX} 条")));
+    }
+}
+
+/// 设备关联页的状态机测试。
+///
+/// 这里跑的是「界面会看到什么」：生成码、取消、两端配对、移除设备。
+/// 协议细节由 `xime-p2p` 自己的测试覆盖，这里只验证状态流转与线程边界。
+#[cfg(all(test, feature = "pair-page"))]
+mod pair_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn state(dir: &std::path::Path) -> PairState {
+        PairState::with_dir(dir.to_path_buf())
+    }
+
+    /// 跑一遍真实配对：a 显示码，b 按地址（本机回环）连过去。
+    fn pair(a: &mut PairState, b: &mut PairState) {
+        a.start_display();
+        let info = a.display.as_ref().expect("显示端未生成码");
+        let code = info.code.clone();
+        let port = info.port;
+
+        b.show_manual = true;
+        b.addr_input = format!("127.0.0.1:{port}");
+        b.code_input = code;
+        b.start_join();
+
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            a.poll();
+            b.poll();
+            if !a.peers.is_empty() && !b.peers.is_empty() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "配对超时：a={:?} b={:?}",
+                a.message,
+                b.message
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn 手动地址解析容忍空格并补默认端口() {
+        assert_eq!(
+            parse_pair_addr(" 127.0.0.1 "),
+            Some("127.0.0.1:47823".parse().unwrap())
+        );
+        assert_eq!(
+            parse_pair_addr("127.0.0.1:5000"),
+            Some("127.0.0.1:5000".parse().unwrap())
+        );
+        assert_eq!(parse_pair_addr(""), None);
+        assert_eq!(parse_pair_addr("不是地址"), None);
+    }
+
+    #[test]
+    fn 倒计时从生成时刻起算() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = state(dir.path());
+        assert_eq!(s.display_remaining(), None);
+        assert_eq!(s.display_progress(), 0.0);
+
+        s.display = Some(DisplayInfo {
+            code: "123 456".to_string(),
+            started: Instant::now(),
+            port: 47823,
+        });
+        let left = s.display_remaining().unwrap();
+        assert!(left > 0 && left <= xime_p2p::CODE_TTL.as_secs());
+        let p = s.display_progress();
+        assert!(p > 0.0 && p <= 1.0);
+    }
+
+    /// 取消后立刻重新生成：旧线程的收尾事件必须被会话号挡掉。
+    #[test]
+    fn 重新生成码不会被旧会话的收尾事件清掉() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = state(dir.path());
+
+        s.start_display();
+        assert!(s.display.is_some(), "首次生成失败：{:?}", s.message);
+        s.cancel_display();
+        assert!(s.display.is_none());
+
+        s.start_display();
+        assert!(s.display.is_some(), "重新生成失败：{:?}", s.message);
+        // 等旧线程把「已取消」投递上来再轮询——它不能作用到新会话。
+        std::thread::sleep(Duration::from_millis(1500));
+        s.poll();
+        assert!(s.display.is_some(), "旧会话的收尾事件误清了新会话");
+        s.cancel_display();
+    }
+
+    /// 切换方向只是换视图：已生成的码必须继续有效，
+    /// 否则用户切过去看一眼输入框就把码废了。
+    #[test]
+    fn 切换标签不中断进行中的显示端会话() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = state(dir.path());
+
+        assert_eq!(s.tab, PairTab::Display, "默认应停在显示码一侧");
+        s.start_display();
+        assert!(s.display.is_some(), "生成失败：{:?}", s.message);
+
+        s.set_tab(1);
+        assert_eq!(s.tab, PairTab::Join);
+        assert!(s.display.is_some(), "切标签把会话清掉了");
+
+        s.poll();
+        assert!(s.display.is_some(), "切标签后轮询丢了会话");
+
+        // 越界索引回到默认，不 panic——索引来自界面，不值得为它引入错误态。
+        s.set_tab(9);
+        assert_eq!(s.tab, PairTab::Display);
+        s.cancel_display();
+    }
+
+    #[test]
+    fn 两端可完成配对并互相写入配对表() {
+        let a_dir = tempfile::tempdir().unwrap();
+        let b_dir = tempfile::tempdir().unwrap();
+        let mut a = state(a_dir.path());
+        let mut b = state(b_dir.path());
+
+        pair(&mut a, &mut b);
+
+        assert_eq!(a.peers[0].did, b.did);
+        assert_eq!(b.peers[0].did, a.did);
+        assert!(a.display.is_none(), "配对成功后显示端应结束等待");
+        assert!(!b.joining);
+        assert_eq!(a.message.as_ref().map(|m| m.1), Some(false));
+    }
+
+    #[test]
+    fn 移除设备后配对表清空() {
+        let a_dir = tempfile::tempdir().unwrap();
+        let b_dir = tempfile::tempdir().unwrap();
+        let mut a = state(a_dir.path());
+        let mut b = state(b_dir.path());
+        pair(&mut a, &mut b);
+
+        let did = a.peers[0].did.clone();
+        a.remove_peer(&did);
+        assert!(a.peers.is_empty());
+        assert_eq!(a.message.as_ref().map(|m| m.1), Some(false));
+        // 磁盘上也不能留：否则重启设置器又「复活」。
+        assert!(xime_p2p::PeerStore::load(a.dir.join("peers.json"))
+            .unwrap()
+            .is_empty());
+    }
+}
+
+/// 同步方式与 IME 侧 `desired_key` 的判定必须一致：这里只测纯逻辑与
+/// toml 往返，不碰真实配置文件（那条路径指向用户目录）。
+#[cfg(all(test, feature = "clipboard-page"))]
+mod sync_mode_tests {
+    use super::*;
+
+    #[test]
+    fn 老配置缺少_transport_时按插件处理() {
+        let cfg: ClipboardSyncConfig = toml::from_str("enabled = true\nplugin_id = \"webdav\"")
+            .expect("老配置应能解析");
+        assert_eq!(cfg.transport, "plugin");
+        assert_eq!(SyncMode::from_config(&cfg), SyncMode::Plugin);
+    }
+
+    #[test]
+    fn 空白_transport_不产生第三种状态() {
+        let cfg: ClipboardSyncConfig =
+            toml::from_str("enabled = true\ntransport = \"  \"").expect("应能解析");
+        assert_eq!(SyncMode::from_config(&cfg), SyncMode::Plugin);
+    }
+
+    #[test]
+    fn 关闭时即使传输方式是_p2p_也算关闭() {
+        let cfg: ClipboardSyncConfig =
+            toml::from_str("enabled = false\ntransport = \"p2p\"").expect("应能解析");
+        assert_eq!(SyncMode::from_config(&cfg), SyncMode::Off);
+        assert!(!SyncMode::from_config(&cfg).enabled());
+    }
+
+    /// 设置页写出的 toml 必须能被 IME 那套结构读出同一个结论。
+    #[test]
+    fn 三种模式写完读回一致() {
+        for mode in [SyncMode::Off, SyncMode::Plugin, SyncMode::P2p] {
+            let cfg = ClipboardSyncConfig {
+                enabled: mode.enabled(),
+                plugin_id: "webdav".to_string(),
+                transport: mode.transport().to_string(),
+            };
+            let text = toml::to_string(&cfg).expect("序列化");
+            let back: ClipboardSyncConfig = toml::from_str(&text).expect("反序列化");
+            assert_eq!(SyncMode::from_config(&back), mode, "往返后模式变了：{text}");
+        }
+    }
+
+    #[test]
+    fn 越界索引落到关闭() {
+        assert_eq!(SyncMode::from_index(9), SyncMode::Off);
+        assert_eq!(SyncMode::from_index(2), SyncMode::P2p);
+        assert_eq!(SyncMode::LABELS.len(), 3);
+        assert_eq!(SyncMode::P2p.index(), 2);
     }
 }

@@ -87,7 +87,7 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
                             ],
                             Some(dark_mode_option),
                             |mode| Message::DarkModeChanged(mode.to_value()),
-                        )
+                        ).text_size(14).padding([8, 10])
                         .style(move |_theme, status| pick_list_style(colors, status))
                         .into(),
                     ),
@@ -99,7 +99,7 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
                             scheme_names.clone(),
                             Some(light_scheme),
                             Message::ColorSchemeLightChanged,
-                        )
+                        ).text_size(14).padding([8, 10])
                         .style(move |_theme, status| pick_list_style(colors, status))
                         .into(),
                     ),
@@ -111,7 +111,7 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
                             scheme_names,
                             Some(dark_scheme),
                             Message::ColorSchemeDarkChanged,
-                        )
+                        ).text_size(14).padding([8, 10])
                         .style(move |_theme, status| pick_list_style(colors, status))
                         .into(),
                     ),
