@@ -2624,11 +2624,14 @@ fn humanize_default_id(id: &str) -> String {
 }
 
 fn package_id_from_path(path: &str) -> Option<String> {
-    let name = std::path::Path::new(path).file_name()?.to_string_lossy();
-    if !archive_name_ok(&name) {
+    // 路径可能来自其他平台的文档/聊天（如 macOS 上粘贴 `C:\x\rime-ice.zip`），
+    // 因此不依赖 `std::path` 的本机分隔符，两种分隔符都认；末尾分隔符先去掉。
+    let trimmed = path.trim().trim_end_matches(['/', '\\']);
+    let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    if name.is_empty() || !archive_name_ok(name) {
         return None;
     }
-    sanitize_package_id(&name).map(|id| humanize_default_id(&id))
+    sanitize_package_id(name).map(|id| humanize_default_id(&id))
 }
 
 fn filename_from_url(url: &str) -> Option<String> {

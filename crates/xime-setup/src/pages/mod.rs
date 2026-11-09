@@ -52,15 +52,15 @@ pub fn sidebar_groups() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)
 
     // 「智能」组：智能联想 + 语音转文本（各条目自门控）。
     #[cfg(any(feature = "smart-suggestion-page", feature = "voice-page"))]
-    {
-        // with_capacity 绕开 vec_init_then_push：每项各自 cfg 门控，无法写成 vec! 字面量
-        let mut smart_items: Vec<(&'static str, &'static str)> = Vec::with_capacity(2);
-        #[cfg(feature = "smart-suggestion-page")]
-        smart_items.push(("icons/thinking.svg", "智能联想"));
-        #[cfg(feature = "voice-page")]
-        smart_items.push(("icons/mic.svg", "语音转文本"));
-        groups.push(("智能", smart_items));
-    }
+    groups.push((
+        "智能",
+        vec![
+            #[cfg(feature = "smart-suggestion-page")]
+            ("icons/thinking.svg", "智能联想"),
+            #[cfg(feature = "voice-page")]
+            ("icons/mic.svg", "语音转文本"),
+        ],
+    ));
 
     #[cfg(any(
         target_os = "linux",
@@ -69,14 +69,14 @@ pub fn sidebar_groups() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)
         feature = "backup-page"
     ))]
     {
-        #[allow(unused_mut)] // pair-page 单独启用时仍需 push
-        let mut sync_items: Vec<(&'static str, &'static str)> = Vec::new();
-        #[cfg(feature = "pair-page")]
-        sync_items.push(("icons/sync.svg", "设备关联"));
-        #[cfg(feature = "clipboard-page")]
-        sync_items.push(("icons/clipboard.svg", "剪贴板"));
-        #[cfg(feature = "backup-page")]
-        sync_items.push(("icons/backup.svg", "同步与备份"));
+        let sync_items: Vec<(&'static str, &'static str)> = vec![
+            #[cfg(feature = "pair-page")]
+            ("icons/sync.svg", "设备关联"),
+            #[cfg(feature = "clipboard-page")]
+            ("icons/clipboard.svg", "剪贴板"),
+            #[cfg(feature = "backup-page")]
+            ("icons/backup.svg", "同步与备份"),
+        ];
         if !sync_items.is_empty() {
             groups.push(("同步与备份", sync_items));
         }

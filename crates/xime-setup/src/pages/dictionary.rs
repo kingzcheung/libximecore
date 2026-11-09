@@ -19,7 +19,7 @@ use crate::state::{CustomPhraseState, DICT_ENTRIES_PAGE_SIZE};
 #[cfg(any(windows, feature = "dict-page"))]
 use iced::widget::{column, container, pick_list, row, text, text_input, Space};
 #[cfg(any(windows, feature = "dict-page"))]
-use iced::{border, Alignment, Background, Border, Color, Length};
+use iced::{Alignment, Background, Color, Length};
 
 /// Windows：真实词典管理（rime 用户词典经 IPC 操作）。
 #[cfg(any(windows, feature = "dict-page"))]

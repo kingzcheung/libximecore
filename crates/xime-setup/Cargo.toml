@@ -65,6 +65,12 @@ rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "a
 # 语音页复制识别文本（arboard 带 wayland-data-control，KDE 可用）。
 arboard.workspace = true
 
+# 方案包导入的「浏览文件」「从剪贴板读取」在三个平台都要用（state.rs 无条件编译），
+# 因此 macOS 同样需要这两个依赖。
+[target.'cfg(target_os = "macos")'.dependencies]
+arboard.workspace = true
+rfd.workspace = true
+
 [features]
 default = []
 smart-suggestion-page = []
