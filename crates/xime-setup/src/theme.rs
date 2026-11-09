@@ -98,6 +98,11 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
     )
 }
 
+/// 相对亮度（BT.601）：用来决定主色上的文字该用白还是深色。
+fn lightness(color: Color) -> f32 {
+    0.299 * color.r + 0.587 * color.g + 0.114 * color.b
+}
+
 /// 主题颜色：Tailwind zinc 色阶 + 可定制主色，风格参考 ximed 桌面 UI。
 #[derive(Clone, Copy, Debug)]
 pub struct ThemeColors {
@@ -107,8 +112,17 @@ pub struct ThemeColors {
     pub surface: Color,
     /// 悬停底色。
     pub surface_hover: Color,
-    /// 更浅的次级底色（kbd、胶囊、图标底）。
+    /// 更浅的次级底色（kbd、胶囊、图标底、输入框填充）。
     pub surface_variant: Color,
+    /// 分段控件（tabs）轨道底色：必须比窗口底色再深一档，否则整条轨道
+    /// 和页面糊在一起，只剩下选中项在飘。
+    pub track: Color,
+    /// 分段控件选中项底色（白/深灰药丸）。
+    pub tab_active: Color,
+    /// 次要按钮底色（浮在页面和卡片上都要看得见，所以不用 surface）。
+    pub control_bg: Color,
+    /// 次要按钮描边。
+    pub control_border: Color,
     /// 主色（强调文字、按钮填充、焦点描边）。
     pub primary: Color,
     /// 主色悬停（按钮 hover 填充）。
@@ -149,6 +163,8 @@ pub struct ThemeColors {
     pub success_dim: Color,
     /// 文本选区。
     pub selection: Color,
+    /// 是否深色主题（阴影/叠加层需要按明暗分别取值）。
+    pub is_dark: bool,
 }
 
 impl ThemeColors {
@@ -166,15 +182,25 @@ impl ThemeColors {
             // Tailwind zinc 深色 + 主色提亮（深底可读性）
             let primary = mix(base, WHITE, 0.28);
             let primary_hover = mix(base, WHITE, 0.4);
+            // 提亮后的主色可能已经偏浅，白字压不住——按亮度改用深色文字。
+            let on_primary = if lightness(primary) > 0.5 {
+                Color::from_rgb8(0x0a, 0x0a, 0x0c)
+            } else {
+                Color::WHITE
+            };
             Self {
-                background: Color::from_rgb8(0x0a, 0x0a, 0x0c),
-                surface: Color::from_rgb8(0x15, 0x15, 0x18),
-                surface_hover: Color::from_rgb8(0x22, 0x22, 0x27),
-                surface_variant: Color::from_rgb8(0x1c, 0x1c, 0x1f),
+                background: Color::from_rgb8(0x09, 0x09, 0x0b),
+                surface: Color::from_rgb8(0x14, 0x14, 0x17),
+                surface_hover: Color::from_rgb8(0x23, 0x23, 0x27),
+                surface_variant: Color::from_rgb8(0x23, 0x23, 0x27),
+                track: Color::from_rgb8(0x26, 0x26, 0x2b),
+                tab_active: Color::from_rgb8(0x3a, 0x3a, 0x41),
+                control_bg: Color::from_rgb8(0x21, 0x21, 0x26),
+                control_border: Color::from_rgb8(0x35, 0x35, 0x3c),
                 primary,
                 primary_hover,
                 primary_dim: Color::from_rgba(primary.r, primary.g, primary.b, 0.18),
-                on_primary: Color::WHITE,
+                on_primary,
                 secondary: Color::from_rgb8(0x6e, 0xd4, 0xc8),
                 secondary_dim: Color::from_rgba8(0x6e, 0xd4, 0xc8, 0.16),
                 tertiary: Color::from_rgb8(0xf2, 0xb8, 0x7d),
@@ -182,7 +208,7 @@ impl ThemeColors {
                 foreground: Color::from_rgb8(0xf4, 0xf4, 0xf5),
                 foreground_muted: Color::from_rgb8(0xa1, 0xa1, 0xaa),
                 foreground_faint: Color::from_rgb8(0x71, 0x71, 0x7a),
-                border: Color::from_rgb8(0x2a, 0x2a, 0x30),
+                border: Color::from_rgb8(0x29, 0x29, 0x30),
                 border_strong: Color::from_rgb8(0x3f, 0x3f, 0x46),
                 disabled: Color::from_rgb8(0x52, 0x52, 0x5b),
                 error: Color::from_rgb8(0xfb, 0x71, 0x85),
@@ -191,6 +217,7 @@ impl ThemeColors {
                 success: Color::from_rgb8(0x34, 0xd3, 0x99),
                 success_dim: Color::from_rgba8(0x34, 0xd3, 0x99, 0.15),
                 selection: Color::from_rgba(base.r, base.g, base.b, 0.35),
+                is_dark: true,
             }
         } else {
             // Tailwind zinc 浅色
@@ -198,8 +225,12 @@ impl ThemeColors {
             Self {
                 background: Color::from_rgb8(0xf4, 0xf4, 0xf5),
                 surface: Color::WHITE,
-                surface_hover: Color::from_rgb8(0xf4, 0xf4, 0xf5),
-                surface_variant: Color::from_rgb8(0xfa, 0xfa, 0xfa),
+                surface_hover: Color::from_rgb8(0xec, 0xec, 0xef),
+                surface_variant: Color::from_rgb8(0xf4, 0xf4, 0xf5),
+                track: Color::from_rgb8(0xe6, 0xe6, 0xea),
+                tab_active: Color::WHITE,
+                control_bg: Color::WHITE,
+                control_border: Color::from_rgb8(0xe3, 0xe3, 0xe8),
                 primary: base,
                 primary_hover,
                 primary_dim: Color::from_rgba(base.r, base.g, base.b, 0.12),
@@ -211,7 +242,7 @@ impl ThemeColors {
                 foreground: Color::from_rgb8(0x18, 0x18, 0x1b),
                 foreground_muted: Color::from_rgb8(0x71, 0x71, 0x7a),
                 foreground_faint: Color::from_rgb8(0xa1, 0xa1, 0xaa),
-                border: Color::from_rgb8(0xe4, 0xe4, 0xe7),
+                border: Color::from_rgb8(0xe7, 0xe7, 0xea),
                 border_strong: Color::from_rgb8(0xd4, 0xd4, 0xd8),
                 disabled: Color::from_rgb8(0xa1, 0xa1, 0xaa),
                 error: Color::from_rgb8(0xe1, 0x1d, 0x48),
@@ -220,6 +251,7 @@ impl ThemeColors {
                 success: Color::from_rgb8(0x05, 0x96, 0x69),
                 success_dim: Color::from_rgba8(0x05, 0x96, 0x69, 0.10),
                 selection: Color::from_rgba(base.r, base.g, base.b, 0.3),
+                is_dark: false,
             }
         }
     }

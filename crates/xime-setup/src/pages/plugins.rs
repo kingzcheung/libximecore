@@ -38,21 +38,26 @@ pub fn view<'a>(settings: &'a SettingsState, colors: &'a ThemeColors) -> Element
 }
 
 fn empty_state<'a>(colors: &'a ThemeColors) -> Element<'a, Message> {
+    // 空态放进卡片里（和输入方案页一致）：直接摊在页面上会只剩两行灰字
+    // 悬在半空，看起来像内容没加载出来。
+    let colors_copy = *colors;
     container(
         column![
             text("暂无已安装的插件")
                 .size(14)
-                .color(colors.foreground_muted),
+                .font(semibold())
+                .color(colors.foreground),
             text("从扩展商店下载插件后会显示在这里")
                 .size(13)
-                .color(colors.foreground_faint),
+                .color(colors.foreground_muted),
         ]
-        .spacing(8)
+        .spacing(6)
         .align_x(Alignment::Center),
     )
     .width(Length::Fill)
     .padding(32)
     .center_x(Length::Fill)
+    .style(move |_| card_style(&colors_copy))
     .into()
 }
 

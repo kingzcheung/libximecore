@@ -56,7 +56,25 @@ fn open_directory(dir: &std::path::Path) {
     let _ = std::process::Command::new(cmd).arg(dir).spawn();
 }
 
+/// 用系统默认浏览器打开链接（关于页的「项目主页」）。
+fn open_url(url: &str) {
+    open_directory(std::path::Path::new(url));
+}
+
 pub fn run() -> iced::Result {
+    run_with(xime_config::app_metadata().clone())
+}
+
+/// 带参数启动设置应用。
+///
+/// 设置界面在 Windows / Linux / macOS 三平台共用同一份代码，产品差异
+/// （显示名、设置窗标题、简介、主页、版本、应用标识）必须由宿主通过
+/// [`xime_config::AppMetadata`] 传进来，界面里不再写死任何产品名。
+///
+/// 这里顺带调用 `set_app_metadata`，让配置路径解析与界面显示出自同一份标识；
+/// 宿主若已经注入过，则保留先注入的那份。
+pub fn run_with(meta: xime_config::AppMetadata) -> iced::Result {
+    let _ = xime_config::set_app_metadata(meta);
     // 冷启动计时起点：iced 的图形后端探测（wgpu 建 Vulkan/DX12/GL 实例、
     // 枚举适配器）与窗口/字体初始化都在 `.run()` 内部，实测这是冷启动的
     // 大头（约 1 秒量级），与业务数据加载无关。
@@ -65,7 +83,7 @@ pub fn run() -> iced::Result {
     let icon = crate::Assets::get("image/icon.png")
         .and_then(|f| iced::window::icon::from_file_data(&f.data, None).ok());
     let meta = xime_config::app_metadata();
-    let title: &'static str = Box::leak(format!("{} 设置", meta.display_name).into_boxed_str());
+    let title: &'static str = Box::leak(meta.settings_name.to_string().into_boxed_str());
     iced::application(SettingsApp::new, update, view)
         .title(title)
         // 显式默认字体：通用族（Sans Serif）在 Windows 上可能被 fontdb 解析到
@@ -156,6 +174,9 @@ pub fn update(state: &mut SettingsApp, message: Message) -> Task<Message> {
             let (_, user_dir) = xime_config::get_data_dirs();
             let dir = user_dir.parent().unwrap_or(&user_dir);
             open_directory(dir);
+        }
+        Message::OpenProjectHomepage => {
+            open_url(xime_config::app_metadata().homepage);
         }
         Message::InstallSchema(id) => {
             state.settings.install_market_schema(&id);

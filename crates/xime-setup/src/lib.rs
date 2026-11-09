@@ -2,6 +2,7 @@ pub mod app;
 pub mod backup;
 pub mod components;
 pub mod pages;
+pub mod profile;
 pub mod state;
 pub mod theme;
 pub mod webdav;
@@ -13,7 +14,7 @@ pub mod speech;
 #[cfg(feature = "voice-page")]
 pub mod speech_models;
 
-pub use app::{run, SettingsApp};
+pub use app::{run, run_with, SettingsApp};
 #[cfg(feature = "voice-page")]
 pub use speech_models::{
     set_notify_speech_delete, set_notify_speech_download, set_notify_speech_select,

@@ -1,0 +1,16 @@
+[package]
+name = "xime-p2p-c"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "xime-p2p 的 C ABI 薄层（供鸿蒙 NAPI 等非 Rust 宿主调用）"
+repository.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+xime-p2p.workspace = true
+xime-sync-domain.workspace = true

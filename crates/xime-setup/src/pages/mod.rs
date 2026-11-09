@@ -132,7 +132,7 @@ pub fn sidebar(current: usize, colors: &ThemeColors) -> Element<'static, Message
                 text(*title)
                     .size(12)
                     .font(semibold())
-                    .color(colors.foreground_faint),
+                    .color(colors.foreground_muted),
             )
             .width(Length::Fill)
             .padding([0, 10]),
@@ -175,7 +175,7 @@ fn brand(colors: &ThemeColors) -> Element<'static, Message> {
                 .size(15)
                 .font(semibold())
                 .color(colors.foreground),
-            text("输入法设置")
+            text(xime_config::app_metadata().subtitle)
                 .size(12)
                 .font(medium())
                 .color(colors.foreground_muted),

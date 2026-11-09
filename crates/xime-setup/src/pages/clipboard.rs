@@ -282,6 +282,7 @@ fn plugin_items<'a>(
                         .unwrap_or(0),
                 )
             }).text_size(14).padding([8, 10])
+            .width(Length::Fixed(180.0))
             .style(move |_theme, status| pick_list_style(colors, status))
             .into(),
         ));

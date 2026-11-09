@@ -1,6 +1,6 @@
 use crate::components::widgets::{
-    badge, button_danger, button_disabled, button_primary, card_style, pick_list_style, semibold,
-    switch, text_button, RADIUS_MD,
+    badge, button_danger, button_disabled, button_primary, card_style, medium, pick_list_style,
+    scroll_style_bare, semibold, switch, text_button, RADIUS_MD,
 };
 use crate::state::{
     MarketModel, MarketModelState, MarketPlugin, MarketPluginState, MarketSchema,
@@ -81,7 +81,7 @@ fn chip_bar<'a>(
     options.push(String::new());
     options.append(&mut tags);
 
-    let mut chips = row![].spacing(6);
+    let mut chips = row![].spacing(6).padding([2, 0]);
     for tag in options {
         let is_active = selected.as_deref() == Some(tag.as_str());
         chips = chips.push(chip(tag, is_active, colors));
@@ -91,6 +91,7 @@ fn chip_bar<'a>(
         .horizontal()
         .width(Length::Fill)
         .height(Length::Shrink)
+        .style(move |theme, status| scroll_style_bare(colors, theme, status))
         .into()
 }
 
@@ -101,21 +102,33 @@ fn chip<'a>(tag: String, active: bool, colors: &'a ThemeColors) -> Element<'a, M
     } else {
         tag.clone()
     };
-    button(text(label).size(13).color(if active {
-        colors.on_primary
-    } else {
-        colors.foreground_muted
-    }))
-    .padding([5, 12])
+    button(
+        container(
+            text(label)
+                .size(13)
+                .font(medium())
+                .color(if active {
+                    colors.on_primary
+                } else {
+                    colors.foreground_muted
+                }),
+        )
+        .height(Length::Fill)
+        .center_y(Length::Fill),
+    )
+    .height(30.0)
+    .padding([0, 12])
     .style(move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        // 未选中项用「白底 + 细描边」：筛选条本身贴在浅灰页面上，
+        // 浅灰填充会和页面糊在一起，看着像一排纯文字。
         button::Style {
             background: Some(Background::Color(if active {
                 colors.primary
             } else if hovered {
                 colors.surface_hover
             } else {
-                colors.surface_variant
+                colors.control_bg
             })),
             text_color: if active {
                 colors.on_primary
@@ -123,8 +136,12 @@ fn chip<'a>(tag: String, active: bool, colors: &'a ThemeColors) -> Element<'a, M
                 colors.foreground_muted
             },
             border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
+                color: if active {
+                    Color::TRANSPARENT
+                } else {
+                    colors.control_border
+                },
+                width: if active { 0.0 } else { 1.0 },
                 radius: border::radius(999.0),
             },
             ..button::Style::default()
@@ -142,18 +159,16 @@ fn grid_rows<'a>(
     children: impl IntoIterator<Item = Element<'a, Message, iced::Theme, iced::Renderer>>,
 ) -> Element<'a, Message, iced::Theme, iced::Renderer> {
     let cards: Vec<_> = children.into_iter().collect();
-    let mut list = column![].spacing(8).width(Length::Fill);
+    let mut list = column![].spacing(12).width(Length::Fill);
     let mut iter = cards.into_iter();
     while iter.len() > 0 {
         let taken: Vec<_> = iter.by_ref().take(2).collect();
         let missing = 2 - taken.len();
-        let mut line = row![].spacing(8).width(Length::Fill).height(160);
+        // 不写死行高：以前 `.height(160)` 会把带提示条的卡片直接裁掉一截
+        // （提示文字只剩半个字高）。卡片按内容自适应，同排高度差由内容决定。
+        let mut line = row![].spacing(12).width(Length::Fill);
         for card in taken {
-            line = line.push(
-                container(card)
-                    .width(Length::FillPortion(1))
-                    .height(Length::Fill),
-            );
+            line = line.push(container(card).width(Length::FillPortion(1)));
         }
         for _ in 0..missing {
             line = line.push(iced::widget::Space::new().width(Length::FillPortion(1)));

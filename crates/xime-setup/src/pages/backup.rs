@@ -2,7 +2,7 @@
 use crate::components::settings::{settings_group, settings_item, settings_page};
 use crate::components::widgets::{
     button_disabled, button_primary, button_secondary, label, pick_list_style, text_button,
-    text_input_style,
+    text_input_style, value_label,
 };
 use crate::state::{Message, SettingsState};
 use crate::theme::ThemeColors;
@@ -278,19 +278,13 @@ fn rime_sync_group<'a>(
                 "本机标识",
                 Some("installation_id，快照目录以此隔离各设备"),
                 colors,
-                text(&s.installation_id)
-                    .size(13)
-                    .color(colors.foreground_muted)
-                    .into(),
+                value_label(&s.installation_id, 22, colors),
             ),
             settings_item(
                 "快照目录",
                 Some(devices_desc),
                 colors,
-                text(s.sync_dir.display().to_string())
-                    .size(13)
-                    .color(colors.foreground_muted)
-                    .into(),
+                value_label(s.sync_dir.display().to_string(), 34, colors),
             ),
             settings_item(
                 "上次同步",

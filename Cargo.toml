@@ -15,6 +15,7 @@ members = [
     "crates/xime-sync-service",
     "crates/xime-sync-server",
     "crates/xime-p2p",
+    "crates/xime-p2p-c",
 ]
 
 # xime-speech 的 sherpa-onnx-sys 需要预编译原生库（SHERPA_ONNX_LIB_DIR /
@@ -34,6 +35,7 @@ default-members = [
     "crates/xime-sync-service",
     "crates/xime-sync-server",
     "crates/xime-p2p",
+    "crates/xime-p2p-c",
 ]
 
 [workspace.package]

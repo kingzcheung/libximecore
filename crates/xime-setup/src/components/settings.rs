@@ -18,7 +18,7 @@ pub fn settings_page<'a, Message: 'a>(
             .font(semibold())
             .color(colors.foreground),
         column(groups)
-            .spacing(12)
+            .spacing(16)
             .width(Length::Fill)
             .height(Length::Shrink),
     ]
@@ -60,7 +60,7 @@ pub fn settings_group<'a, Message: 'a>(
 
     container(body)
         .width(Length::Fill)
-        .padding(16)
+        .padding(18)
         .style(move |_| card_style(&colors))
         .into()
 }
@@ -91,7 +91,7 @@ pub fn settings_item<'a, Message: 'a>(
     row![left, control]
         .spacing(12)
         .align_y(Alignment::Center)
-        .padding([12, 4])
+        .padding([13, 4])
         .width(Length::Fill)
         .into()
 }

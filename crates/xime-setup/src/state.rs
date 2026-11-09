@@ -619,6 +619,8 @@ pub enum Message {
     MarketRetry,
     /// 输入方案页：打开用户数据目录。
     OpenUserDataDir,
+    /// 关于页：在浏览器里打开项目主页。
+    OpenProjectHomepage,
     /// 扩展商店：切换「方案 / 模型」Tab。
     StoreTab(usize),
     /// 扩展商店：分类筛选（"" 表示全部）。

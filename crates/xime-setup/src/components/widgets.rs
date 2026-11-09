@@ -3,12 +3,30 @@ use iced::widget::{
     button, container, opaque, row, stack, text, toggler, toggler::Status as TogglerStatus,
     Button,
 };
-use iced::{border, Alignment, Background, Border, Color, Element, Length};
+use iced::{border, Alignment, Background, Border, Color, Element, Length, Shadow, Vector};
 
-/// 圆角（Tailwind rounded-lg/md）。
-pub const RADIUS_LG: f32 = 12.0;
-pub const RADIUS_MD: f32 = 10.0;
+/// 圆角：对齐 HeroUI 的 rounded-large / medium / small。
+pub const RADIUS_LG: f32 = 14.0;
+pub const RADIUS_MD: f32 = 12.0;
 pub const RADIUS_SM: f32 = 8.0;
+
+/// 卡片投影：HeroUI 的 shadow-small（浅色下几乎不可见，只给卡片一点浮起感；
+/// 深色下用更高的不透明度代替——深色底上的黑色阴影基本看不出来）。
+pub fn card_shadow(colors: &ThemeColors) -> Shadow {
+    if colors.is_dark {
+        Shadow {
+            color: Color::from_rgba8(0x00, 0x00, 0x00, 0.45),
+            offset: Vector::new(0.0, 1.0),
+            blur_radius: 3.0,
+        }
+    } else {
+        Shadow {
+            color: Color::from_rgba8(0x18, 0x18, 0x1b, 0.06),
+            offset: Vector::new(0.0, 1.0),
+            blur_radius: 3.0,
+        }
+    }
+}
 
 /// 应用 UI 字体：显式指定微软雅黑 UI（Windows 全版本自带，拉丁+中文覆盖完整）。
 /// 不用通用族名（Sans Serif）：fontdb 在 Windows 上的通用族解析可能命中
@@ -57,14 +75,19 @@ pub fn modal_dialog_sized<'a, Message: 'a>(
     let mut card = container(dialog)
         .width(Length::Fixed(width))
         .max_width(width)
-        .padding(16)
+        .padding(18)
         .style(move |_| container::Style {
             background: Some(Background::Color(colors.surface)),
             text_color: Some(colors.foreground),
             border: Border {
                 color: colors.border,
                 width: 1.0,
-                radius: border::radius(RADIUS_MD),
+                radius: border::radius(RADIUS_LG),
+            },
+            shadow: Shadow {
+                color: Color::from_rgba8(0x00, 0x00, 0x00, 0.28),
+                offset: Vector::new(0.0, 8.0),
+                blur_radius: 24.0,
             },
             ..container::Style::default()
         });
@@ -88,7 +111,7 @@ pub fn modal_dialog_sized<'a, Message: 'a>(
 
 // ---- container styles ----
 
-/// 卡片容器样式：圆角 + 边框 + 柔和底色。
+/// 卡片容器样式：圆角 + 边框 + 柔和底色 + 一层极浅投影。
 pub fn card_style(colors: &ThemeColors) -> container::Style {
     container::Style {
         background: Some(Background::Color(colors.surface)),
@@ -98,6 +121,7 @@ pub fn card_style(colors: &ThemeColors) -> container::Style {
             width: 1.0,
             radius: border::radius(RADIUS_LG),
         },
+        shadow: card_shadow(colors),
         ..container::Style::default()
     }
 }
@@ -147,6 +171,36 @@ pub fn scroll_style(
     style
 }
 
+/// 无滚动条样式：横向筛选条这类地方不需要可见滚动条——默认滚动条会盖在
+/// 最后一行文字上，把「拼音」的底部压掉一截。轨道与滑块都做成透明，
+/// 只用滚轮/触控板滚动。
+pub fn scroll_style_bare(
+    colors: &ThemeColors,
+    theme: &iced::Theme,
+    status: iced::widget::scrollable::Status,
+) -> iced::widget::scrollable::Style {
+    let mut style = scroll_style(colors, theme, status);
+    let bare = iced::widget::scrollable::Rail {
+        background: None,
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: border::radius(0.0),
+        },
+        scroller: iced::widget::scrollable::Scroller {
+            background: Background::Color(Color::TRANSPARENT),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: border::radius(0.0),
+            },
+        },
+    };
+    style.vertical_rail = bare;
+    style.horizontal_rail = bare;
+    style
+}
+
 // ---- button styles ----
 
 /// 主要操作按钮：主色填充 + 主色文字。
@@ -185,18 +239,21 @@ pub fn danger_button_style(colors: &ThemeColors, status: button::Status) -> butt
     }
 }
 
-/// 次要操作按钮：透明底 + 边框，悬停浅色底。
+/// 次要操作按钮（HeroUI `bordered` 变体）：浅色底 + 一像素细描边。
+///
+/// 不用「灰色填充」的原因：设置页的底色本身是浅灰，灰填充的按钮在页面上
+/// 直接消失，只剩一排文字飘着；白底 + 细描边在页面和卡片里都立得住。
 pub fn secondary_button_style(colors: &ThemeColors, status: button::Status) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     button::Style {
-        background: if hovered {
-            Some(Background::Color(colors.surface_hover))
+        background: Some(Background::Color(if hovered {
+            colors.surface_hover
         } else {
-            None
-        },
+            colors.control_bg
+        })),
         text_color: colors.foreground,
         border: Border {
-            color: colors.border_strong,
+            color: colors.control_border,
             width: 1.0,
             radius: border::radius(RADIUS_MD),
         },
@@ -263,21 +320,22 @@ pub fn number_button_style(colors: &ThemeColors, status: button::Status) -> butt
     }
 }
 
-/// 文本输入框样式：底色 + 边框，聚焦时主色描边。
+/// 文本输入框样式（HeroUI `flat` 变体）：浅灰填充、默认无描边，
+/// 悬停加深、聚焦时主色描边。
 pub fn text_input_style(
     colors: &ThemeColors,
     status: iced::widget::text_input::Status,
 ) -> iced::widget::text_input::Style {
-    let border_color = match status {
-        iced::widget::text_input::Status::Focused { .. } => colors.primary,
-        iced::widget::text_input::Status::Hovered => colors.border_strong,
-        _ => colors.border,
+    let (border_color, border_width) = match status {
+        iced::widget::text_input::Status::Focused { .. } => (colors.primary, 1.5),
+        iced::widget::text_input::Status::Hovered => (colors.border_strong, 1.0),
+        _ => (Color::TRANSPARENT, 1.0),
     };
     iced::widget::text_input::Style {
-        background: Background::Color(colors.surface),
+        background: Background::Color(colors.surface_variant),
         border: Border {
             color: border_color,
-            width: 1.0,
+            width: border_width,
             radius: border::radius(RADIUS_MD),
         },
         icon: colors.foreground_muted,
@@ -293,60 +351,75 @@ pub fn text_input_style(
 ///
 /// 以前每个控件各写各的 padding（按钮 30/32/34 三种高度混在一行里），
 /// 同一行左右控件会高低错开，看着像拼出来的。
-pub const CONTROL_HEIGHT: f32 = 34.0;
+pub const CONTROL_HEIGHT: f32 = 36.0;
+
+/// 按钮内容垂直居中。
+///
+/// iced 的 `button` 只做「限流 + 内缩」（`layout::padded`），内容一律贴顶放；
+/// 固定高度的按钮里文字会整体偏上两三像素，一排按钮看过去明显不在一条中线上。
+fn vcenter<'a, Message: 'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+    container(content)
+        .width(Length::Shrink)
+        .height(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+}
 
 /// 主要按钮：主色填充。
-pub fn button_primary<'a, Message: Clone>(
+pub fn button_primary<'a, Message: Clone + 'a>(
     label: impl Into<String>,
     colors: &ThemeColors,
     on_press: Message,
 ) -> Button<'a, Message> {
     let colors = *colors;
-    button(
+    button(vcenter(
         text(label.into())
             .size(14)
             .font(medium())
-            .color(colors.on_primary),
-    )
-    .padding([8, 18])
+            .color(colors.on_primary)
+            .into(),
+    ))
+    .padding([0, 18])
     .height(CONTROL_HEIGHT)
     .style(move |_theme, status| primary_button_style(&colors, status))
     .on_press(on_press)
 }
 
-/// 次要按钮：透明底 + 边框。
-pub fn button_secondary<'a, Message: Clone>(
+/// 次要按钮：浅灰填充、无描边（HeroUI flat）。
+pub fn button_secondary<'a, Message: Clone + 'a>(
     label: impl Into<String>,
     colors: &ThemeColors,
     on_press: Message,
 ) -> Button<'a, Message> {
     let colors = *colors;
-    button(
+    button(vcenter(
         text(label.into())
             .size(14)
             .font(medium())
-            .color(colors.foreground),
-    )
-    .padding([8, 14])
+            .color(colors.foreground)
+            .into(),
+    ))
+    .padding([0, 16])
     .height(CONTROL_HEIGHT)
     .style(move |_theme, status| secondary_button_style(&colors, status))
     .on_press(on_press)
 }
 
 /// 危险按钮：错误色填充（卸载等破坏性操作）。
-pub fn button_danger<'a, Message: Clone>(
+pub fn button_danger<'a, Message: Clone + 'a>(
     label: impl Into<String>,
     colors: &ThemeColors,
     on_press: Message,
 ) -> Button<'a, Message> {
     let colors = *colors;
-    button(
+    button(vcenter(
         text(label.into())
             .size(14)
             .font(medium())
-            .color(colors.on_error),
-    )
-    .padding([8, 14])
+            .color(colors.on_error)
+            .into(),
+    ))
+    .padding([0, 16])
     .height(CONTROL_HEIGHT)
     .style(move |_theme, status| danger_button_style(&colors, status))
     .on_press(on_press)
@@ -359,27 +432,33 @@ pub fn button_disabled<'a, Message: 'a + Clone>(
     colors: &ThemeColors,
 ) -> Element<'a, Message> {
     let colors = *colors;
-    button(text(label.into()).size(14).color(colors.foreground_muted))
-        .padding([8, 14])
-        .height(CONTROL_HEIGHT)
-        .style(move |_theme, _status| secondary_button_style(&colors, button::Status::Disabled))
-        .into()
+    button(vcenter(
+        text(label.into())
+            .size(14)
+            .color(colors.foreground_muted)
+            .into(),
+    ))
+    .padding([0, 16])
+    .height(CONTROL_HEIGHT)
+    .style(move |_theme, _status| secondary_button_style(&colors, button::Status::Disabled))
+    .into()
 }
 
 /// 纯文字按钮：主色文字 + 悬停浅底（用于「重试」等）。
-pub fn text_button<'a, Message: Clone>(
+pub fn text_button<'a, Message: Clone + 'a>(
     label: impl Into<String>,
     colors: &ThemeColors,
     on_press: Message,
 ) -> Button<'a, Message> {
     let colors = *colors;
-    button(
+    button(vcenter(
         text(label.into())
             .size(14)
             .font(medium())
-            .color(colors.primary),
-    )
-    .padding([8, 12])
+            .color(colors.primary)
+            .into(),
+    ))
+    .padding([0, 12])
     .height(CONTROL_HEIGHT)
     .style(move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -399,6 +478,32 @@ pub fn text_button<'a, Message: Clone>(
         }
     })
     .on_press(on_press)
+}
+
+/// 中间省略的长值：UUID / 路径这类东西缩短后仍要能认出两头，
+/// 直接截尾会把最有信息量的部分（设备尾号、末级目录）切掉。
+pub fn shorten_middle(value: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= max_chars || max_chars < 8 {
+        return value.to_string();
+    }
+    let head = max_chars / 2;
+    let tail = max_chars - head - 1;
+    let mut out: String = chars[..head].iter().collect();
+    out.push('…');
+    out.extend(&chars[chars.len() - tail..]);
+    out
+}
+
+/// 只读值文字（右对齐、弱化色）：给「本机标识 / 目录」这类行用，
+/// 长度先经 `shorten_middle` 压过，撑不破卡片。
+pub fn value_label<'a, Message: 'a>(
+    value: impl Into<String>,
+    limit: usize,
+    colors: &ThemeColors,
+) -> Element<'a, Message> {
+    let value = shorten_middle(&value.into(), limit);
+    text(value).size(13).color(colors.foreground_muted).into()
 }
 
 // ---- labels / kbd ----
@@ -476,23 +581,28 @@ pub fn progress<'a, Message: 'a>(value: f32, colors: &ThemeColors) -> Element<'a
 
 // ---- pick_list ----
 
-/// 下拉选择框样式：底色 + 边框 + 主色把手（与商店页版本选择器同款观感）。
+/// 下拉选择框样式（HeroUI flat）：浅灰填充、默认无描边，展开时主色描边。
 ///
 /// iced 默认 pick_list 用它的主题色，和本应用的 `ThemeColors`（自定义深/浅色）
 /// 不同源，混在卡片里会显得"借来的控件"，所以统一到这里描一遍。
 pub fn pick_list_style(
     colors: &ThemeColors,
-    _status: iced::widget::pick_list::Status,
+    status: iced::widget::pick_list::Status,
 ) -> iced::widget::pick_list::Style {
+    let border_color = match status {
+        iced::widget::pick_list::Status::Opened { .. } => colors.primary,
+        iced::widget::pick_list::Status::Hovered => colors.border_strong,
+        iced::widget::pick_list::Status::Active => Color::TRANSPARENT,
+    };
     iced::widget::pick_list::Style {
         text_color: colors.foreground,
         background: Background::Color(colors.surface_variant),
         border: Border {
-            color: colors.border,
+            color: border_color,
             width: 1.0,
             radius: border::radius(RADIUS_MD),
         },
-        handle_color: colors.primary,
+        handle_color: colors.foreground_muted,
         placeholder_color: colors.foreground_muted,
     }
 }
@@ -608,7 +718,7 @@ pub fn tab_bar<'a, Message: Clone + 'a>(
     on_select: impl Fn(usize) -> Message,
 ) -> Element<'a, Message> {
     let colors = *colors;
-    let mut bar = row![].spacing(2).padding(2);
+    let mut bar = row![].spacing(2).padding(3);
 
     // 等宽标签：各段按最长的那条文字取宽，否则「关闭 / 同步插件 / 设备互传」
     // 会按内容各占一块，整条控制看起来歪歪扭扭。
@@ -624,26 +734,36 @@ pub fn tab_bar<'a, Message: Clone + 'a>(
         let is_active = i == active;
         let label_text = *label_text;
         bar = bar.push(
-            button(
+            button(vcenter(
                 text(label_text)
                     .size(14)
+                    .font(medium())
                     .color(if is_active {
                         colors.primary
                     } else {
                         colors.foreground_muted
-                    }),
-            )
-            .padding([0, 16])
+                    })
+                    .into(),
+            ))
+            .padding([0, 14])
             .width(Length::Fixed(cell))
-            .height(CONTROL_HEIGHT - 4.0)
+            .height(CONTROL_HEIGHT - 6.0)
             .style(move |_theme, status| {
                 let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                // 选中项是一枚「药丸」：实心底色 + 一点主色；未选中项只有悬停
+                // 才浮出半透明白。轨道本身比页面深一档，两者才分得开。
+                let background = if is_active {
+                    Some(Background::Color(colors.tab_active))
+                } else if hovered {
+                    Some(Background::Color(Color {
+                        a: 0.55,
+                        ..colors.surface
+                    }))
+                } else {
+                    None
+                };
                 button::Style {
-                    background: if is_active || hovered {
-                        Some(Background::Color(colors.surface))
-                    } else {
-                        None
-                    },
+                    background,
                     text_color: if is_active {
                         colors.primary
                     } else {
@@ -664,7 +784,7 @@ pub fn tab_bar<'a, Message: Clone + 'a>(
     container(bar)
         .width(Length::Shrink)
         .style(move |_| container::Style {
-            background: Some(Background::Color(colors.surface_variant)),
+            background: Some(Background::Color(colors.track)),
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
