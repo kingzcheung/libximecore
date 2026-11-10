@@ -362,11 +362,11 @@ static NOTIFY_DICT_LIST: OnceLock<fn() -> Option<DictListResult>> = OnceLock::ne
 #[cfg(any(windows, feature = "dict-page"))]
 static NOTIFY_DICT_BACKUP: OnceLock<fn(&str) -> bool> = OnceLock::new();
 #[cfg(any(windows, feature = "dict-page"))]
-static NOTIFY_DICT_RESTORE: OnceLock<fn(&str) -> bool> = OnceLock::new();
+static NOTIFY_DICT_RESTORE: OnceLock<fn(&str) -> Result<(), String>> = OnceLock::new();
 #[cfg(any(windows, feature = "dict-page"))]
-static NOTIFY_DICT_EXPORT: OnceLock<fn(&str, &str) -> Option<i32>> = OnceLock::new();
+static NOTIFY_DICT_EXPORT: OnceLock<fn(&str, &str) -> Result<i32, String>> = OnceLock::new();
 #[cfg(any(windows, feature = "dict-page"))]
-static NOTIFY_DICT_IMPORT: OnceLock<fn(&str, &str) -> Option<i32>> = OnceLock::new();
+static NOTIFY_DICT_IMPORT: OnceLock<fn(&str, &str) -> Result<i32, String>> = OnceLock::new();
 #[cfg(any(windows, feature = "dict-page"))]
 static NOTIFY_DICT_ENTRIES: OnceLock<fn(&str, &str) -> Option<DictEntriesResult>> = OnceLock::new();
 
@@ -384,19 +384,19 @@ pub fn set_notify_dict_backup(f: fn(&str) -> bool) {
 
 /// 设置宿主进程的「恢复用户词典」回调（IPC RestoreUserDict）。
 #[cfg(any(windows, feature = "dict-page"))]
-pub fn set_notify_dict_restore(f: fn(&str) -> bool) {
+pub fn set_notify_dict_restore(f: fn(&str) -> Result<(), String>) {
     let _ = NOTIFY_DICT_RESTORE.set(f);
 }
 
 /// 设置宿主进程的「导出用户词典」回调（IPC ExportUserDict，返回条数）。
 #[cfg(any(windows, feature = "dict-page"))]
-pub fn set_notify_dict_export(f: fn(&str, &str) -> Option<i32>) {
+pub fn set_notify_dict_export(f: fn(&str, &str) -> Result<i32, String>) {
     let _ = NOTIFY_DICT_EXPORT.set(f);
 }
 
 /// 设置宿主进程的「导入用户词典」回调（IPC ImportUserDict，返回条数）。
 #[cfg(any(windows, feature = "dict-page"))]
-pub fn set_notify_dict_import(f: fn(&str, &str) -> Option<i32>) {
+pub fn set_notify_dict_import(f: fn(&str, &str) -> Result<i32, String>) {
     let _ = NOTIFY_DICT_IMPORT.set(f);
 }
 
@@ -458,18 +458,27 @@ fn notify_dict_backup(dict: &str) -> bool {
 }
 
 #[cfg(any(windows, feature = "dict-page"))]
-fn notify_dict_restore(path: &str) -> bool {
-    NOTIFY_DICT_RESTORE.get().map(|f| f(path)).unwrap_or(false)
+fn notify_dict_restore(path: &str) -> Result<(), String> {
+    match NOTIFY_DICT_RESTORE.get() {
+        Some(f) => f(path),
+        None => Err("设置页没有注册恢复回调".to_string()),
+    }
 }
 
 #[cfg(any(windows, feature = "dict-page"))]
-fn notify_dict_export(dict: &str, path: &str) -> Option<i32> {
-    NOTIFY_DICT_EXPORT.get().and_then(|f| f(dict, path))
+fn notify_dict_export(dict: &str, path: &str) -> Result<i32, String> {
+    match NOTIFY_DICT_EXPORT.get() {
+        Some(f) => f(dict, path),
+        None => Err("设置页没有注册导出回调".to_string()),
+    }
 }
 
 #[cfg(any(windows, feature = "dict-page"))]
-fn notify_dict_import(dict: &str, path: &str) -> Option<i32> {
-    NOTIFY_DICT_IMPORT.get().and_then(|f| f(dict, path))
+fn notify_dict_import(dict: &str, path: &str) -> Result<i32, String> {
+    match NOTIFY_DICT_IMPORT.get() {
+        Some(f) => f(dict, path),
+        None => Err("设置页没有注册导入回调".to_string()),
+    }
 }
 
 #[cfg(any(windows, feature = "dict-page"))]
@@ -4673,11 +4682,9 @@ impl DictManageState {
         }
         self.busy = Some("restore");
         std::thread::spawn(move || {
-            let ok = notify_dict_restore(&path);
-            let msg = if ok {
-                "已从快照恢复用户词典".to_string()
-            } else {
-                "恢复用户词典失败（快照无效或服务未运行？）".to_string()
+            let msg = match notify_dict_restore(&path) {
+                Ok(()) => "已从快照恢复用户词典".to_string(),
+                Err(reason) => format!("恢复用户词典失败：{reason}"),
             };
             Self::submit(DictTaskResult::Message(msg));
         });
@@ -4691,8 +4698,8 @@ impl DictManageState {
         self.busy = Some("export");
         std::thread::spawn(move || {
             let msg = match notify_dict_export(&dict, &path) {
-                Some(count) => format!("已导出 {dict}（{count} 条）"),
-                None => format!("导出 {dict} 失败（输入法服务未运行？）"),
+                Ok(count) => format!("已导出 {dict}（{count} 条）"),
+                Err(reason) => format!("导出 {dict} 失败：{reason}"),
             };
             Self::submit(DictTaskResult::Message(msg));
         });
@@ -4706,8 +4713,8 @@ impl DictManageState {
         self.busy = Some("import");
         std::thread::spawn(move || {
             let msg = match notify_dict_import(&dict, &path) {
-                Some(count) => format!("已导入 {dict}（{count} 条）"),
-                None => format!("导入 {dict} 失败（文本格式无效或服务未运行？）"),
+                Ok(count) => format!("已导入 {dict}（{count} 条）"),
+                Err(reason) => format!("导入 {dict} 失败：{reason}"),
             };
             Self::submit(DictTaskResult::Message(msg));
         });
