@@ -3,9 +3,10 @@ use crate::components::settings::{settings_group, settings_item, settings_page};
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 use crate::components::widgets::{badge, button_primary, button_secondary};
 use crate::components::widgets::{
-    label, medium, modal_dialog, pick_list_style, semibold, tab_bar, text_button, text_input_style,
+    label, medium, modal_dialog, pick_list_style, semibold, switch, tab_bar, text_button,
+    text_input_style,
 };
-use crate::state::{ClipboardState, Message, SettingsState, SyncMode, CLIPBOARD_PAGE_SIZE};
+use crate::state::{ClipboardState, Message, SettingsState, CLIPBOARD_PAGE_SIZE};
 use crate::theme::ThemeColors;
 use iced::widget::{button, column, container, pick_list, row, text, text_input};
 use iced::{border, Background, Border, Color, Element, Length};
@@ -137,34 +138,68 @@ fn sync_groups<'a>(
     let sp = &settings.sync_plugin;
     let mut sync_items: Vec<Element<'a, Message>> = Vec::new();
 
-    // 原来的「启用开关 + 插件下拉」是两个控件拼出四种状态，其中三种说不清：
-    // 开关开着但没选插件、选了插件但开关关着……这里换成一个显式三选一，
-    // 与 IME 侧 `desired_key` 的判定一一对应。
+    // 通道是勾选的：勾了哪些就启用哪些，「首个」是优先通道。剪贴板同步只是一个功能，
+    // 直连与插件只是两条通道——以后新增同步功能复用同一套通道，不再有「全局传输方式」。
+    let p2p_on = sp.channels.iter().any(|c| c == "p2p");
+    let plugin_id = sp
+        .channels
+        .iter()
+        .find(|c| c.as_str() != "p2p")
+        .cloned()
+        .or_else(|| sp.plugins.get(sp.plugin_index).map(|p| p.id.clone()))
+        .unwrap_or_default();
+    let plugin_on = sp.channels.iter().any(|c| c.as_str() != "p2p");
+
     sync_items.push(settings_item(
-        "同步方式",
-        Some("两种方式只能选一种；「设备互传」不经过任何服务器"),
+        "局域网直连",
+        Some(if sp.p2p_peers.is_empty() {
+            "还没有已配对设备，先到「设备关联」配对".to_string()
+        } else {
+            format!("已配对 {} 台，不经过任何服务器", sp.p2p_peers.len())
+        }),
         colors,
-        tab_bar(
-            &SyncMode::LABELS,
-            sp.mode.index(),
-            colors,
-            Message::SyncModeChanged,
-        ),
+        switch(p2p_on, colors, move |_| {
+            Message::SyncChannelToggled("p2p".to_string())
+        }),
     ));
 
-    match sp.mode {
-        SyncMode::Off => {
-            sync_items.push(settings_item(
-                "同步已关闭",
-                Some("剪贴板只保存在本机，不发送到任何设备"),
-                colors,
-                label("", colors),
-            ));
-        }
-        SyncMode::P2p => {
+    let plugin_name = sp
+        .plugins
+        .iter()
+        .find(|p| p.id == plugin_id)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| plugin_id.clone());
+    sync_items.push(settings_item(
+        if plugin_name.is_empty() { "同步插件" } else { plugin_name.as_str() },
+        Some(if sp.plugins.is_empty() {
+            "还没有安装剪贴板同步插件".to_string()
+        } else if plugin_id.is_empty() {
+            "勾选后经插件同步，可跨网络".to_string()
+        } else {
+            format!("经插件同步，可跨网络；勾选即启用（{}）", plugin_id)
+        }),
+        colors,
+        switch(plugin_on, colors, move |_| {
+            Message::SyncChannelToggled(if plugin_id.is_empty() {
+                "plugin".to_string()
+            } else {
+                plugin_id.clone()
+            })
+        }),
+    ));
+
+    if !p2p_on && !plugin_on {
+        sync_items.push(settings_item(
+            "同步已关闭",
+            Some("剪贴板只保存在本机，不发送到任何设备"),
+            colors,
+            label("", colors),
+        ));
+    } else {
+        if p2p_on {
             sync_items.push(p2p_peers_item(sp, colors));
         }
-        SyncMode::Plugin => {
+        if plugin_on {
             sync_items.extend(plugin_items(sp, colors));
         }
     }

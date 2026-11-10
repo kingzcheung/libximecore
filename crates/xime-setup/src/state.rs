@@ -716,6 +716,8 @@ pub enum Message {
     /// 剪贴板同步：切换同步方式（0 关闭 / 1 同步插件 / 2 局域网直连）。
     #[cfg(feature = "clipboard-page")]
     SyncModeChanged(usize),
+    /// 勾选/取消一个同步通道（id 为 `"p2p"` 或插件 id）。
+    SyncChannelToggled(String),
     /// 剪贴板同步插件：选择插件。
     #[cfg(feature = "clipboard-page")]
     SyncPluginSelected(usize),
@@ -3707,17 +3709,11 @@ pub struct ClipboardSyncConfig {
     pub enabled: bool,
     #[serde(default)]
     pub plugin_id: String,
-    /// 传输方式：`plugin`（经插件/服务器）或 `p2p`（局域网直连）。
+    /// 启用的通道，有序、首个优先：`"p2p"` = 局域网直连，其它值是剪贴板同步插件 id。
     ///
-    /// 老配置里没有这个字段，必须默认成 `plugin`——默认成 `p2p` 会让所有存量
-    /// 服务器用户升级后静默停同步（IME 那边只有一句「未配对」的日志）。
-    #[serde(default = "default_transport")]
-    pub transport: String,
-}
-
-#[cfg(feature = "clipboard-page")]
-pub fn default_transport() -> String {
-    "plugin".to_string()
+    /// 「功能 × 通道」两个维度正交：以后新增的同步功能复用同一套通道。
+    #[serde(default)]
+    pub channels: Vec<String>,
 }
 
 #[cfg(feature = "clipboard-page")]
@@ -3726,7 +3722,7 @@ impl Default for ClipboardSyncConfig {
         Self {
             enabled: false,
             plugin_id: String::new(),
-            transport: default_transport(),
+            channels: Vec::new(),
         }
     }
 }
@@ -3735,12 +3731,14 @@ impl Default for ClipboardSyncConfig {
 ///
 /// 原来是「启用开关 + plugin_id 非空」两个条件拼出同一件事，界面上说不清：
 /// 开关开着但没选插件时到底同不同步？合成一个显式状态后，UI 与 IME 的判断
-/// 是同一个函数（[`Self::enabled`] / [`Self::transport`]），不会各说各话。
+/// 是同一个函数（[`Self::enabled`] / [`Self::from_config`]），不会各说各话。
 #[cfg(feature = "clipboard-page")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncMode {
     /// 完全关闭。
     Off,
+    /// 自动：先走局域网直连，连不上（跨网 / 对端离线）再退到插件。
+    Auto,
     /// 经 clipboard_sync 插件（WebDAV / 自建 ximed 等）。
     Plugin,
     /// 局域网直连，不经任何服务器。
@@ -3750,35 +3748,39 @@ pub enum SyncMode {
 #[cfg(feature = "clipboard-page")]
 impl SyncMode {
     /// 分段选择器的文案，顺序与 [`Self::index`] 一致。
-    pub const LABELS: [&'static str; 3] = ["关闭", "同步插件", "设备互传"];
+    pub const LABELS: [&'static str; 4] = ["关闭", "自动", "同步插件", "设备互传"];
 
     pub fn index(self) -> usize {
         match self {
             Self::Off => 0,
-            Self::Plugin => 1,
-            Self::P2p => 2,
+            Self::Auto => 1,
+            Self::Plugin => 2,
+            Self::P2p => 3,
         }
     }
 
     /// 越界索引一律落到「关闭」：索引来自界面，不值得为它引入错误态。
     pub fn from_index(i: usize) -> Self {
         match i {
-            1 => Self::Plugin,
-            2 => Self::P2p,
+            1 => Self::Auto,
+            2 => Self::Plugin,
+            3 => Self::P2p,
             _ => Self::Off,
         }
     }
 
-    /// 由配置还原（IME 侧 `desired_key` 用同一套判定）。
+    /// 由配置还原（IME 侧 `Policy::from_config` 用同一套判定）。
     pub fn from_config(cfg: &ClipboardSyncConfig) -> Self {
-        if !cfg.enabled {
-            Self::Off
-        } else if cfg.transport == "p2p" {
-            Self::P2p
-        } else {
-            // 未识别的值按插件处理：宁可保持既有行为，也不要因为一个拼错的
-            // 字段就让同步静默失效。
-            Self::Plugin
+        if !cfg.enabled || cfg.channels.is_empty() {
+            return Self::Off;
+        }
+        let has_p2p = cfg.channels.iter().any(|c| c == "p2p");
+        let has_plugin = cfg.channels.iter().any(|c| c != "p2p");
+        match (has_p2p, has_plugin) {
+            (true, true) => Self::Auto,
+            (true, false) => Self::P2p,
+            (false, true) => Self::Plugin,
+            (false, false) => Self::Off,
         }
     }
 
@@ -3786,10 +3788,14 @@ impl SyncMode {
         !matches!(self, Self::Off)
     }
 
-    pub fn transport(self) -> &'static str {
+    /// 该模式对应的通道列表（首个优先）。
+    pub fn channels(self, plugin_id: &str) -> Vec<String> {
+        let plugin = if plugin_id.trim().is_empty() { "plugin" } else { plugin_id };
         match self {
-            Self::P2p => "p2p",
-            _ => "plugin",
+            Self::Off => Vec::new(),
+            Self::P2p => vec!["p2p".to_string()],
+            Self::Plugin => vec![plugin.to_string()],
+            Self::Auto => vec!["p2p".to_string(), plugin.to_string()],
         }
     }
 }
@@ -3805,10 +3811,8 @@ pub fn read_clipboard_sync_config() -> ClipboardSyncConfig {
         return Default::default();
     };
     let mut cfg: ClipboardSyncConfig = toml::from_str(&content).unwrap_or_default();
-    // 手写配置时可能留下 `transport = ""`，按默认值处理，别让它变成「第三种」。
-    if cfg.transport.trim().is_empty() {
-        cfg.transport = default_transport();
-    }
+    // 手写配置可能留下空通道项，去掉，别让它变成「幽灵通道」。
+    cfg.channels.retain(|c| !c.trim().is_empty());
     cfg
 }
 
@@ -5288,8 +5292,10 @@ fn parse_weight_input(raw: &str) -> Result<Option<i32>, String> {
 #[cfg(feature = "clipboard-page")]
 #[derive(Clone)]
 pub struct SyncPluginUiState {
-    /// 同步方式（写入 clipboard_sync.toml，IME 常驻循环热加载）。
+    /// 同步方式（由 channels 派生，写配置时以 channels 为准）。
     pub mode: SyncMode,
+    /// 启用的通道（有序、首个优先）：`"p2p"` 或插件 id。
+    pub channels: Vec<String>,
     /// 已安装的 clipboard_sync 插件。
     pub plugins: Vec<ClipboardSyncPluginInfo>,
     /// 当前选中的插件下标。
@@ -5325,6 +5331,7 @@ impl Default for SyncPluginUiState {
             .unwrap_or(0);
         let mut st = Self {
             mode: SyncMode::from_config(&cfg),
+            channels: cfg.channels,
             plugins,
             plugin_index,
             fields: Vec::new(),
@@ -5341,6 +5348,32 @@ impl Default for SyncPluginUiState {
 
 #[cfg(feature = "clipboard-page")]
 impl SyncPluginUiState {
+    /// 勾选/取消一个通道并落盘（`enabled` 跟随「有没有通道」）。
+    pub fn toggle_channel(&mut self, id: &str) {
+        let mut cfg = read_clipboard_sync_config();
+        if cfg.channels.iter().any(|c| c == id) {
+            cfg.channels.retain(|c| c != id);
+        } else {
+            cfg.channels.push(id.to_string());
+            if id != "p2p" {
+                cfg.plugin_id = id.to_string();
+            }
+        }
+        cfg.enabled = !cfg.channels.is_empty();
+        write_clipboard_sync_config(&cfg);
+        self.channels = cfg.channels.clone();
+        self.mode = SyncMode::from_config(&cfg);
+        notify_daemon_reload_plugins();
+        if cfg.channels.iter().any(|c| c == "p2p") {
+            self.refresh_p2p_peers();
+        }
+        self.message = Some(if cfg.channels.is_empty() {
+            "已关闭剪贴板同步".to_string()
+        } else {
+            format!("已启用通道：{}", cfg.channels.join("、"))
+        });
+    }
+
     fn selected(&self) -> Option<&ClipboardSyncPluginInfo> {
         self.plugins.get(self.plugin_index)
     }
@@ -5395,9 +5428,8 @@ impl SyncPluginUiState {
 
     /// 切换同步方式（关闭 / 同步插件 / 局域网直连）。
     ///
-    /// `enabled` 与 `transport` 一次写完：IME 每轮热加载这两个字段，分两次写会
-    /// 出现「已启用但传输方式还是旧的」的瞬时态（比如切到 P2P 时先 enable，
-    /// 那一轮仍按 plugin 发起请求）。
+    /// `enabled` 与 `channels` 一次写完：IME 每轮热加载这两个字段，分两次写会
+    /// 出现「已启用但通道还是旧的」的瞬时态。
     pub fn set_mode(&mut self, mode: SyncMode) {
         if mode == self.mode {
             return;
@@ -5405,15 +5437,16 @@ impl SyncPluginUiState {
         self.mode = mode;
         let mut cfg = read_clipboard_sync_config();
         cfg.enabled = mode.enabled();
-        cfg.transport = mode.transport().to_string();
+        cfg.channels = mode.channels(&cfg.plugin_id);
         write_clipboard_sync_config(&cfg);
         notify_daemon_reload_plugins();
-        if mode == SyncMode::P2p {
+        if matches!(mode, SyncMode::P2p | SyncMode::Auto) {
             self.refresh_p2p_peers();
         }
         self.message = Some(
             match mode {
                 SyncMode::Off => "已关闭剪贴板同步",
+                SyncMode::Auto => "已切换为自动：优先直连，连不上时走插件",
                 SyncMode::Plugin => "已切换为同步插件",
                 SyncMode::P2p => {
                     if self.p2p_peers.is_empty() {
@@ -5446,7 +5479,7 @@ impl SyncPluginUiState {
     /// 直连模式下每秒刷新一次配对表：用户刚在「设备关联」页配完就切回来时，
     /// 这里不能还显示「还没有配对设备」。
     fn poll_p2p_peers(&mut self) {
-        if self.mode != SyncMode::P2p {
+        if !matches!(self.mode, SyncMode::P2p | SyncMode::Auto) {
             return;
         }
         let now = std::time::Instant::now();
@@ -8181,36 +8214,29 @@ mod sync_mode_tests {
     use super::*;
 
     #[test]
-    fn 老配置缺少_transport_时按插件处理() {
+    fn 没有通道时视为关闭() {
         let cfg: ClipboardSyncConfig = toml::from_str("enabled = true\nplugin_id = \"webdav\"")
-            .expect("老配置应能解析");
-        assert_eq!(cfg.transport, "plugin");
-        assert_eq!(SyncMode::from_config(&cfg), SyncMode::Plugin);
-    }
-
-    #[test]
-    fn 空白_transport_不产生第三种状态() {
-        let cfg: ClipboardSyncConfig =
-            toml::from_str("enabled = true\ntransport = \"  \"").expect("应能解析");
-        assert_eq!(SyncMode::from_config(&cfg), SyncMode::Plugin);
+            .expect("应能解析");
+        assert!(cfg.channels.is_empty());
+        assert_eq!(SyncMode::from_config(&cfg), SyncMode::Off);
     }
 
     #[test]
     fn 关闭时即使传输方式是_p2p_也算关闭() {
         let cfg: ClipboardSyncConfig =
-            toml::from_str("enabled = false\ntransport = \"p2p\"").expect("应能解析");
+            toml::from_str("enabled = false\nchannels = [\"p2p\"]").expect("应能解析");
         assert_eq!(SyncMode::from_config(&cfg), SyncMode::Off);
         assert!(!SyncMode::from_config(&cfg).enabled());
     }
 
     /// 设置页写出的 toml 必须能被 IME 那套结构读出同一个结论。
     #[test]
-    fn 三种模式写完读回一致() {
-        for mode in [SyncMode::Off, SyncMode::Plugin, SyncMode::P2p] {
+    fn 四种模式写完读回一致() {
+        for mode in [SyncMode::Off, SyncMode::Auto, SyncMode::Plugin, SyncMode::P2p] {
             let cfg = ClipboardSyncConfig {
                 enabled: mode.enabled(),
                 plugin_id: "webdav".to_string(),
-                transport: mode.transport().to_string(),
+                channels: mode.channels("webdav"),
             };
             let text = toml::to_string(&cfg).expect("序列化");
             let back: ClipboardSyncConfig = toml::from_str(&text).expect("反序列化");
@@ -8221,8 +8247,10 @@ mod sync_mode_tests {
     #[test]
     fn 越界索引落到关闭() {
         assert_eq!(SyncMode::from_index(9), SyncMode::Off);
-        assert_eq!(SyncMode::from_index(2), SyncMode::P2p);
-        assert_eq!(SyncMode::LABELS.len(), 3);
-        assert_eq!(SyncMode::P2p.index(), 2);
+        assert_eq!(SyncMode::from_index(3), SyncMode::P2p);
+        assert_eq!(SyncMode::LABELS.len(), 4);
+        assert_eq!(SyncMode::P2p.index(), 3);
+        assert_eq!(SyncMode::Auto.index(), 1);
+        assert_eq!(SyncMode::from_index(1), SyncMode::Auto);
     }
 }
