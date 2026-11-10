@@ -22,7 +22,7 @@ mod recognizer;
 mod registry;
 
 pub use recognizer::{SpeechConfig, SpeechError, SpeechProvider, StreamingRecognizer};
-pub use registry::{AsrModelProfile, AsrModelRegistry};
+pub use registry::{AsrModelProfile, AsrModelRegistry, ModelChecksum};
 
 /// sherpa-onnx C 库版本（诊断/日志用）。
 pub fn sherpa_version() -> &'static str {
