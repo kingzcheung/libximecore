@@ -3870,7 +3870,7 @@ pub const CLIPBOARD_PAGE_SIZE: usize = 8;
 #[derive(Clone)]
 pub struct ClipboardHistoryState {
     /// 最新在前。
-    pub items: Vec<xime_config::clipboard_store::ClipboardHistoryItem>,
+    pub items: Vec<xime_config::clipboard_store::ClipboardEntry>,
     /// 当前选中的历史条目 id（点击卡片选中，再点取消）。
     pub selected: Option<i64>,
     /// 当前页（0 起）。
@@ -3962,7 +3962,7 @@ impl ClipboardHistoryState {
 #[cfg(feature = "clipboard-page")]
 #[derive(Clone)]
 pub struct QuickSendState {
-    pub items: Vec<xime_config::clipboard_store::QuickSendItem>,
+    pub items: Vec<xime_config::clipboard_store::ClipboardEntry>,
     /// 当前选中的快捷发送条目 id（点击卡片选中，再点取消）。
     pub selected: Option<i64>,
     /// 当前页（0 起）。
@@ -7611,10 +7611,11 @@ schemas:
     fn list_pagination_pages_and_clamps() {
         let mk = |n: usize| ClipboardHistoryState {
             items: (0..n)
-                .map(|i| xime_config::clipboard_store::ClipboardHistoryItem {
+                .map(|i| xime_config::clipboard_store::ClipboardEntry {
                     id: i as i64,
                     text: format!("t{i}"),
                     timestamp: 0,
+                    ..Default::default()
                 })
                 .collect(),
             selected: None,
